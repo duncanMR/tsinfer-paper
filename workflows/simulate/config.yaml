@@ -1,0 +1,31 @@
+prefix: "set -euo pipefail; "
+data_dir: "data"
+env_dir: "/well/kelleher/users/uuc395/tsinfer-paper/env"
+tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
+
+models:
+  - "OutOfAfrica_4J17"
+
+contigs:
+  - chr20
+
+samples:
+  - {"CEU": 100, "CHB": 100, "YRI": 100}
+
+length_multipliers:
+  - 0.01
+
+seeds:
+  - 42
+
+versions:
+  - "v0.4"
+  - "v1.0"
+
+ancestor_chunk_size: 500
+
+resources:
+  default:
+    threads: 63
+    mem_mb: 250000
+    time_min: 500
