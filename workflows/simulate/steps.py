@@ -4,6 +4,7 @@ import tskit
 import pandas as pd
 import os
 import sys
+import json
 from pathlib import Path
 
 
@@ -36,7 +37,9 @@ def remove_singletons(ts):
             sites_to_remove.append(variant.site.id)
     return ts.delete_sites(sites_to_remove)
 
-def prepare_ancestor_df(anc_data_list, ts, output_dir, chunk_size, done_path):
+def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_path):
+    metadata_path = Path(metadata_path)
+        
     base_anc_data = anc_data_list[0]
     for anc_data in anc_data_list[1:]:
         assert base_anc_data.num_ancestors == anc_data.num_ancestors
@@ -77,32 +80,17 @@ def prepare_ancestor_df(anc_data_list, ts, output_dir, chunk_size, done_path):
     index = df.index.to_numpy()
     index_chunks = [index[i:i + chunk_size] for i in range(0, len(index), chunk_size)]
 
-    with open(done_path, "w") as f_done:
-        for i, chunk in enumerate(index_chunks):
-            chunk_df = df.loc[chunk]
-            chunk_path = output_dir / f"chunk_{i}_unprocessed.csv"
-            chunk_df.to_csv(chunk_path, index=False)
-            f_done.write(f"chunk_{i}_unprocessed.csv\n")
-    done_path.touch()
+    for chunk_id, chunk in enumerate(index_chunks):
+        chunk_df = df.loc[chunk]
+        assert chunk_size >= len(chunk_df) > 0
+        chunk_path = output_dir / f"unprocessed-chunk-{chunk_id}.csv"
+        chunk_df.to_csv(chunk_path, index=False)
+
+    with open(metadata_path, "w") as meta_file:
+        json.dump({"num_chunks": len(index_chunks)}, meta_file)
+
 
 def process_ancestor_chunk(df, ts, anc_data_dict, output_path):
-      df.to_csv(output_path, index=False)
-      
-
-
-
-
-def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
-            
-    sys.path.append(tsinfer_path)
-    import tsinfer
-    ts = tszip.decompress(os.path.join(folder, f"{prefix}-simulated-pruned.trees.tsz"))
-    full_df = pd.read_csv(os.path.join(folder, f"{prefix}-anc_id.csv"))
-    subset_df = full_df.loc[chunk]
-    anc_data_dict = {}
-    for v in versions:
-        anc_data_path = os.path.join(folder, f"{prefix}-{v}-ancestors.zarr")
-        anc_data_dict[v] = tsinfer.formats.AncestorData.load(anc_data_path)
     true_nodes = np.unique(df.true_node)
     tables = ts.dump_tables()
     flags = tables.nodes.flags
@@ -117,7 +105,7 @@ def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
     records = []
     sites_position = np.append(ts.sites_position, ts.sequence_length)
 
-    for i, row in subset_df.iterrows():
+    for i, row in df.iterrows():
         true_node = row['true_node']
         true_node_index = true_index_map[true_node]
         a = true_genotypes[true_node_index]
@@ -135,12 +123,10 @@ def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
             "focal_positions": row['focal_positions'],
         }
 
-        anc_dict = {}
         olap_start = true_start
         olap_end = true_end
-        for v in versions:
-            anc = anc_data_dict[v].ancestor(inf_node)
-            anc_dict[v] = anc
+        for version, anc_data in anc_data_dict.items():
+            anc = anc_data.ancestor(inf_node)
             olap_start = max(olap_start, anc.start)
             olap_end = min(olap_end, anc.end)
 
@@ -150,8 +136,8 @@ def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
         olap_pos_span = olap_pos_end - olap_pos_start
         true_olap = true_full_haplotype[olap_start:olap_end]
 
-        for v in versions:
-            anc = anc_dict[v]
+        for version, anc_data in anc_data_dict.items():
+            anc = anc_data.ancestor(inf_node)
             start = anc.start
             end = anc.end
             inf_olap = anc.full_haplotype[olap_start:olap_end]
@@ -162,15 +148,15 @@ def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
             start_pos = sites_position[start]
             end_pos = sites_position[end]
             record.update({
-                f'inferred_site_left_{v}': start,
-                f'inferred_site_right_{v}': end,
-                f'inferred_site_span_{v}': end - start,
-                f'inferred_pos_left_{v}': start_pos,
-                f'inferred_pos_right_{v}': end_pos,
-                f'inferred_pos_span_{v}': end_pos - start_pos,
-                f'num_errors_{v}': np.sum(errors),
-                f'num_should_be_0_{v}': np.sum(should_be_0),
-                f'num_should_be_1_{v}': np.sum(should_be_1),
+                f'inferred_site_left_{version}': start,
+                f'inferred_site_right_{version}': end,
+                f'inferred_site_span_{version}': end - start,
+                f'inferred_pos_left_{version}': start_pos,
+                f'inferred_pos_right_{version}': end_pos,
+                f'inferred_pos_span_{version}': end_pos - start_pos,
+                f'num_errors_{version}': np.sum(errors),
+                f'num_should_be_0_{version}': np.sum(should_be_0),
+                f'num_should_be_1_{version}': np.sum(should_be_1),
             })
 
         record.update({
@@ -193,3 +179,4 @@ def process_ancestor_df(chunk, folder, prefix, versions, tsinfer_path):
         records.append(record)
 
     df = pd.DataFrame.from_records(records)
+    df.to_csv(output_path, index=False)
