@@ -5,11 +5,18 @@ import steps
 import json
 import tskit
 import pandas as pd
+import numpy as np
 import shutil
+import warnings
+import contextlib
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore is deprecated.*")
 
 configfile: "config.yaml"
 shell.prefix(config["prefix"])
 data_dir = Path(config["data_dir"])
+progress_dir = Path(config["progress_dir"])
+sys.path.append(config['tsinfer_dir'])
+import tsinfer
 
 def get_resource(rule_name, resource_type):
     if rule_name in config["resources"] and resource_type in config["resources"][rule_name]:
@@ -36,25 +43,15 @@ rule all:
             seed=config["seeds"],
             version=config["versions"],
         ),
-        data_dir / "config.yaml"
-
-
-rule copy_config:
-    input:
-        "config.yaml"
-    output:
-        data_dir / "config.yaml"
-    run:
-        shutil.copy(input[0], output[0])
 
 rule simulate:
     output:
         data_dir / "{model_name}-{contig}-lm{length_multiplier}"
                  / "{model_name}-{contig}-lm{length_multiplier}-s{seed}-raw.trees"
-    threads: get_resource("simulate", "threads")
+    threads: get_resource("intensive", "threads")
     resources:
-        mem_mb=get_resource("simulate", "mem_mb"),
-        time_min=get_resource("simulate", "time_min")
+        mem_mb=get_resource("intensive", "mem_mb"),
+        time_min=get_resource("intensive", "time_min")
     run:
         ts = steps.simulate(
             wildcards.model_name,
@@ -72,10 +69,10 @@ rule prune_simulated_ts:
     output:
         data_dir / "{model_name}-{contig}-lm{length_multiplier}"
                  / "{model_name}-{contig}-lm{length_multiplier}-s{seed}-pruned.trees"
-    threads: get_resource("prune_simulated_ts", "threads")
+    threads: get_resource("intensive", "threads")
     resources:
-        mem_mb=get_resource("prune_simulated_ts", "mem_mb"),
-        time_min=get_resource("prune_simulated_ts", "time_min")
+        mem_mb=get_resource("intensive", "mem_mb"),
+        time_min=get_resource("intensive", "time_min")
     run:
         ts = tskit.load(input[0])
         ts = steps.prune_simulated_ts(ts)
@@ -88,10 +85,10 @@ rule filter_sites:
     output:
         data_dir / "{model_name}-{contig}-lm{length_multiplier}"
                  / "{model_name}-{contig}-lm{length_multiplier}-s{seed}-pruned-filtered.trees"
-    threads: get_resource("filter_sites", "threads")
+    threads: get_resource("intensive", "threads")
     resources:
-        mem_mb=get_resource("filter_sites", "mem_mb"),
-        time_min=get_resource("filter_sites", "time_min")
+        mem_mb=get_resource("intensive", "mem_mb"),
+        time_min=get_resource("intensive", "time_min")
     run:
         ts = tskit.load(input[0])
         ts = steps.remove_singletons(ts)
@@ -104,6 +101,9 @@ rule generate_ancestors:
     output:
         data_dir / "{model_name}-{contig}-lm{length_multiplier}"
                  / "{model_name}-{contig}-lm{length_multiplier}-s{seed}-{version}-ancestors.zarr"
+    log:
+        progress_dir / "{model_name}-{contig}-lm{length_multiplier}" \
+        / "generate_ancestors-s{seed}-{version}.log"
     threads: get_resource("generate_ancestors", "threads")
     resources:
         mem_mb=get_resource("generate_ancestors", "mem_mb"),
@@ -114,6 +114,7 @@ rule generate_ancestors:
         python generate_ancestors.py \
             {input[0]} \
             {output[0]} \
+            {log[0]} \
             --version {wildcards.version} \
             --threads {threads} \
             --data-dir {config[data_dir]}
@@ -135,14 +136,11 @@ checkpoint build_ancestor_chunks:
     output:
         metadata_json=data_dir / "{model_name}-{contig}-lm{length_multiplier}"
                       / "unprocessed-ancestor-chunks-s{seed}-metadata.json"
-    threads: get_resource("build_ancestor_chunks", "threads")
+    threads: get_resource("intensive", "threads")
     resources:
-        mem_mb=get_resource("build_ancestor_chunks", "mem_mb"),
-        time_min=get_resource("build_ancestor_chunks", "time_min")
+        mem_mb=get_resource("intensive", "mem_mb"),
+        time_min=get_resource("intensive", "time_min")
     run:
-        sys.path.append(config['tsinfer_dir'])
-        import tsinfer
-
         anc_data_list = [
             tsinfer.formats.AncestorData.load(path)
             for path in input.paths
@@ -152,7 +150,6 @@ checkpoint build_ancestor_chunks:
         output_dir = metadata_path.parent / f"unprocessed-ancestor-chunks-s{wildcards.seed}"
         output_dir.mkdir(parents=True, exist_ok=True)
         chunk_size = config["ancestor_chunk_size"]
-
         steps.build_ancestor_chunks(
             anc_data_list=anc_data_list,
             ts=ts,
@@ -199,29 +196,37 @@ rule process_ancestor_chunk:
         data_dir / "{model_name}-{contig}-lm{length_multiplier}" \
         / "processed-ancestor-chunks-s{seed}" \
         / "processed-chunk-{chunk_id}.csv"
+    log:
+        progress_dir / "{model_name}-{contig}-lm{length_multiplier}" \
+        / "processed-ancestor-chunks-s{seed}" \
+        / "process-chunk-{chunk_id}.log"
     threads: get_resource("process_ancestor_chunk", "threads")
     resources:
         mem_mb=get_resource("process_ancestor_chunk", "mem_mb")
     run:
-        sys.path.append(config['tsinfer_dir'])
-        import tsinfer
-
-        chunk_path = Path(input.chunk)
-        df = pd.read_csv(chunk_path)
-        assert len(df) > 0
-
-        ts = tskit.load(input.ts_path)
-        versions = config["versions"]
-        anc_data_dict = {
-            version: tsinfer.formats.AncestorData.load(path)
-            for path, version in zip(input.anc_data_paths, versions)
-        }
-        steps.process_ancestor_chunk(
-            df=df,
-            ts=ts,
-            anc_data_dict=anc_data_dict,
-            output_path=output[0]
-        )
+        with open(log[0], "w") as log_file:
+            with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(log_file):
+                print(f"[INFO] Loading chunk {wildcards.chunk_id}", flush=True)
+                chunk_path = Path(input.chunk)
+                df = pd.read_csv(chunk_path)
+                assert len(df) > 0
+                print(f"[INFO] Loading tree sequence", flush=True)
+                ts = tskit.load(input.ts_path)
+                sites_position = np.append(ts.sites_position, ts.sequence_length)
+                versions = config["versions"]
+                print(f"[INFO] Importing AncestorData", flush=True)
+                anc_data_dict = {
+                    version: tsinfer.formats.AncestorData.load(path)
+                    for path, version in zip(input.anc_data_paths, versions)
+                }
+                print(f"[INFO] Starting DF generation", flush=True)
+                steps.process_ancestor_chunk(
+                    df=df,
+                    ts=ts,
+                    sites_position=sites_position,
+                    anc_data_dict=anc_data_dict,
+                    output_path=output[0]
+                )
 
 rule process_all_chunks:
     input:

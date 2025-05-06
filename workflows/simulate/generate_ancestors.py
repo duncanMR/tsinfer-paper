@@ -3,16 +3,19 @@ import sys
 import click
 import tskit
 from pathlib import Path
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore is deprecated.*")
 
 @click.command()
 @click.argument("input", type=click.Path(exists=True))
 @click.argument("output", type=click.Path())
+@click.argument("log_file", type=click.Path())
 @click.option("--version", required=True, type=str)
 @click.option("--threads", required=True, type=int)
 @click.option("--data-dir", required=True, type=click.Path())
 
 
-def generate_ancestors(input, output, version, threads, data_dir):
+def generate_ancestors(input, output, log_file, version, threads, data_dir):
     """Generate ancestors from a tree sequence."""
 
     if version == "v1.0":
@@ -31,10 +34,6 @@ def generate_ancestors(input, output, version, threads, data_dir):
 
     ts = tskit.load(str(input))
     sample_data = tsinfer.SampleData.from_tree_sequence(ts)
-
-    progress_dir = data_dir / "progress" / "generate_ancestors"
-    progress_dir.mkdir(parents=True, exist_ok=True)
-    log_file = progress_dir / f"{output.stem}.log"
 
     with open(log_file, "w") as log_f:
         ancestors = tsinfer.generate_ancestors(

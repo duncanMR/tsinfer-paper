@@ -5,7 +5,9 @@ import pandas as pd
 import os
 import sys
 import json
+import csv
 from pathlib import Path
+from tqdm import tqdm
 
 
 def simulate(model_name, contig, samples, length_multiplier, seed):
@@ -90,93 +92,105 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
         json.dump({"num_chunks": len(index_chunks)}, meta_file)
 
 
-def process_ancestor_chunk(df, ts, anc_data_dict, output_path):
+def process_ancestor_chunk(df, ts, sites_position, anc_data_dict, output_path):
     true_nodes = np.unique(df.true_node)
+    print(f"[INFO] Building expanded TS", flush=True)
     tables = ts.dump_tables()
     flags = tables.nodes.flags
     flags[:] = tskit.NODE_IS_SAMPLE
     tables.nodes.flags = flags
     expanded_ts = tables.tree_sequence()
+
+    print(f"[INFO] Generating genotype matrix", flush=True)
     true_genotypes = expanded_ts.genotype_matrix(samples=true_nodes).T
     assert true_genotypes.shape[0] == len(true_nodes)
-    true_index_map = {}
-    for i, true_node in enumerate(true_nodes):
-        true_index_map[true_node] = i
-    records = []
-    sites_position = np.append(ts.sites_position, ts.sequence_length)
+    true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
 
-    for i, row in df.iterrows():
-        true_node = row['true_node']
-        true_node_index = true_index_map[true_node]
-        a = true_genotypes[true_node_index]
-        segment = np.where(a != tskit.MISSING_DATA)[0]
-        true_start = segment[0]
-        true_end = segment[-1] + 1
-        true_full_haplotype = (a > 0).astype("int8")
-        true_time = ts.nodes_time[true_node]
-        inf_node = row['inf_node']
+    print(f"[INFO] Building dataframe", flush=True)
+    with open(output_path, "w", newline="") as f:
+        writer = None
+        for row in tqdm(df.itertuples(index=False), total=len(df), desc="Processing rows", ncols=80, mininterval=5):
+            true_node = row.true_node
+            true_node_index = true_index_map[true_node]
+            a = true_genotypes[true_node_index]
+            segment = np.where(a != tskit.MISSING_DATA)[0]
+            true_left = segment[0]
+            true_right = segment[-1] + 1
+            true_full_haplotype = (a > 0).astype("int8")
+            true_time = ts.nodes_time[true_node]
+            inf_node = row.inf_node
+            true_pos_left = sites_position[true_left]
+            true_pos_right = sites_position[true_right]
 
-        record = {
-            "inferred_node": inf_node,
-            "true_node": true_node,
-            "focal_sites": row['focal_sites'],
-            "focal_positions": row['focal_positions'],
-        }
+            record = {
+                "inferred_node": inf_node,
+                "true_node": true_node,
+                "focal_sites": row.focal_sites,
+                "focal_positions": row.focal_positions,
+                'true_time': true_time,
+                'true_site_left': true_left,
+                'true_site_right': true_right,
+                'true_site_span': true_right - true_left,
+                'true_pos_left': true_pos_left,
+                'true_pos_right': true_pos_right,
+                'true_pos_span': true_pos_right - true_pos_left,
+            }
 
-        olap_start = true_start
-        olap_end = true_end
-        for version, anc_data in anc_data_dict.items():
-            anc = anc_data.ancestor(inf_node)
-            olap_start = max(olap_start, anc.start)
-            olap_end = min(olap_end, anc.end)
+            olap_left = true_left
+            olap_right = true_right
+            anc_dict = {}
+            for version, anc_data in anc_data_dict.items():
+                anc = anc_data.ancestor(inf_node)
+                anc_dict[version] = anc
+                olap_left = max(olap_left, anc.start)
+                olap_right = min(olap_right, anc.end)
 
-        olap_site_span = olap_end - olap_start
-        olap_pos_start = sites_position[olap_start]
-        olap_pos_end = sites_position[olap_end]
-        olap_pos_span = olap_pos_end - olap_pos_start
-        true_olap = true_full_haplotype[olap_start:olap_end]
+            olap_site_span = olap_right - olap_left
+            olap_pos_left = sites_position[olap_left]
+            olap_pos_right = sites_position[olap_right]
+            olap_pos_span = olap_pos_right - olap_pos_left
+            true_olap = true_full_haplotype[olap_left:olap_right]
 
-        for version, anc_data in anc_data_dict.items():
-            anc = anc_data.ancestor(inf_node)
-            start = anc.start
-            end = anc.end
-            inf_olap = anc.full_haplotype[olap_start:olap_end]
-            errors = inf_olap != true_olap
-            should_be_0 = true_olap & ~inf_olap
-            should_be_1 = ~true_olap & inf_olap
+            for version, anc in anc_dict.items():
+                inf_left = anc.start
+                inf_right = anc.end
+                inf_olap = anc.full_haplotype[olap_left:olap_right]
+                errors = inf_olap != true_olap
+                should_be_0 = true_olap & ~inf_olap
+                should_be_1 = ~true_olap & inf_olap
+                inf_pos_left = sites_position[inf_left]
+                inf_pos_right = sites_position[inf_right]
+                record.update({
+                    f'inferred_site_left_{version}': inf_left,
+                    f'inferred_site_right_{version}': inf_right,
+                    f'inferred_site_span_{version}': inf_right - inf_left,
+                    f'inferred_overshoot_left_{version}': true_left - inf_left,
+                    f'inferred_overshoot_right_{version}': inf_right - true_right,
+                    f'inferred_pos_left_{version}': inf_pos_left,
+                    f'inferred_pos_right_{version}': inf_pos_right,
+                    f'inferred_pos_span_{version}': inf_pos_right - inf_pos_left,
+                    f'inferred_pos_overshoot_left_{version}': true_pos_left - inf_pos_left,
+                    f'inferred_pos_overshoot_right_{version}': inf_pos_right - true_pos_right,
+                    f'num_errors_{version}': np.sum(errors),
+                    f'num_should_be_0_{version}': np.sum(should_be_0),
+                    f'num_should_be_1_{version}': np.sum(should_be_1),
+                })
 
-            start_pos = sites_position[start]
-            end_pos = sites_position[end]
             record.update({
-                f'inferred_site_left_{version}': start,
-                f'inferred_site_right_{version}': end,
-                f'inferred_site_span_{version}': end - start,
-                f'inferred_pos_left_{version}': start_pos,
-                f'inferred_pos_right_{version}': end_pos,
-                f'inferred_pos_span_{version}': end_pos - start_pos,
-                f'num_errors_{version}': np.sum(errors),
-                f'num_should_be_0_{version}': np.sum(should_be_0),
-                f'num_should_be_1_{version}': np.sum(should_be_1),
+                'inferred_time': anc.time,
+                "overlap_site_left": olap_left,
+                "overlap_site_right": olap_right,
+                'overlap_site_span': olap_site_span,
+                'overlap_pos_start': olap_pos_left,
+                'overlap_pos_end': olap_pos_right,
+                'overlap_pos_span': olap_pos_span,
             })
 
-        record.update({
-            'inferred_time': anc.time,
-            'true_time': true_time,
-            'true_site_left': true_start,
-            'true_site_right': true_end,
-            'true_site_span': true_end - true_start,
-            'true_pos_left': sites_position[true_start],
-            'true_pos_right': sites_position[true_end],
-            'true_pos_span': sites_position[true_end] - sites_position[true_start],
-            "overlap_site_left": olap_start,
-            "overlap_site_right": olap_end,
-            'overlap_site_span': olap_site_span,
-            'overlap_pos_start': olap_pos_start,
-            'overlap_pos_end': olap_pos_end,
-            'overlap_pos_span': olap_pos_span,
-        })
+            if writer is None:
+                writer = csv.DictWriter(f, fieldnames=record.keys())
+                writer.writeheader()
 
-        records.append(record)
+            writer.writerow(record)
+    
+    print(f"[INFO] Finished writing chunk {output_path}")
 
-    df = pd.DataFrame.from_records(records)
-    df.to_csv(output_path, index=False)
