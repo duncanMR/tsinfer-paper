@@ -9,13 +9,13 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore i
 @click.command()
 @click.argument("input", type=click.Path(exists=True))
 @click.argument("output", type=click.Path())
-@click.argument("log_file", type=click.Path())
+@click.argument("log", type=click.Path())
 @click.option("--version", required=True, type=str)
 @click.option("--threads", required=True, type=int)
 @click.option("--data-dir", required=True, type=click.Path())
 
 
-def generate_ancestors(input, output, log_file, version, threads, data_dir):
+def generate_ancestors(input, output, log, version, threads, data_dir):
     """Generate ancestors from a tree sequence."""
 
     if version == "v1.0":
@@ -27,18 +27,18 @@ def generate_ancestors(input, output, log_file, version, threads, data_dir):
 
     sys.path.append(tsinfer_path)
     import tsinfer
-
-    input = Path(input)
-    output = Path(output)
     data_dir = Path(data_dir)
+    vdata = tsinfer.VariantData(
+        input.replace(".mods_done", ""),
+        site_mask="variant_singleton_mask",
+        ancestral_state="variant_ancestral_state",
+    )
+    assert vdata.num_sites > 0
 
-    ts = tskit.load(str(input))
-    sample_data = tsinfer.SampleData.from_tree_sequence(ts)
-
-    with open(log_file, "w") as log_f:
+    with open(log[0], "w") as log_f:
         ancestors = tsinfer.generate_ancestors(
-            sample_data,
-            path=str(output),
+            vdata,
+            path=output,
             genotype_encoding=1,
             num_threads=threads,
             progress_monitor=tsinfer.progress.ProgressMonitor(

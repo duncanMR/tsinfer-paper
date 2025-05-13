@@ -4,21 +4,13 @@ progress_dir: "data/progress"
 env_dir: "/well/kelleher/users/uuc395/tsinfer-paper/env"
 tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
 
-
-models:
-  - "OutOfAfrica_4J17"
-
-contigs:
-  - chr20
-
-samples:
-  - {"CEU": 2000, "CHB": 500, "YRI": 500}
-
-length_multipliers:
-  - 1
-
-seeds:
-  - 1
+sims:
+  - model: "OutOfAfrica_4J17"
+    contig: "chr20"
+    interval: [1e6, 2e6]
+    samples: {"CEU": 200, "CHB": 100, "YRI": 100}
+    num_reps: 1
+    seed: 1
 
 versions:
   - "v0.4"
