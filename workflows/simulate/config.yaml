@@ -25,8 +25,8 @@ resources:
     time_min: 500
 
   intensive:
-    threads: 124
-    mem_mb: 500000
+    threads: 62
+    mem_mb: 250000
     time_min: 500
 
   generate_ancestors:

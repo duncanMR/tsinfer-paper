@@ -268,13 +268,21 @@ rule generate_ancestors:
             --data-dir {config[data_dir]}
         """
 
+def expand_ancestors_by_version(wildcards):
+    return [
+        data_dir
+        / "ancestors"
+        / f"{wildcards.model}-{wildcards.contig}-{wildcards.length}mbp-"
+          f"n{wildcards.n}-rep{wildcards.rep}-{version}-ancestors.zarr"
+        for version in config["versions"]
+    ]
 
 checkpoint build_ancestor_chunks:
     input:
         data_dir
         / "simulated"
         / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned-filtered.trees",
-        expand_ancestor_paths(),
+        expand_ancestors_by_version,
     output:
         data_dir
         / "chunks"
@@ -286,6 +294,7 @@ checkpoint build_ancestor_chunks:
         time_min=get_resource("intensive", "time_min"),
     run:
         anc_data_list = [tsinfer.formats.AncestorData.load(path) for path in input[1:]]
+        assert len(anc_data_list) == len(config["versions"])
         ts = tskit.load(input[0])
         metadata_path = Path(output[0])
         output_dir = metadata_path.parent
@@ -327,7 +336,7 @@ rule process_ancestor_chunk:
         ts_path=data_dir
         / "simulated"
         / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned-filtered.trees",
-        anc_data_paths=expand_ancestor_paths(),
+        anc_data_paths=expand_ancestors_by_version,
     output:
         data_dir
         / "chunks"
