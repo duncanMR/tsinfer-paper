@@ -131,9 +131,9 @@ def plot_ancestor_boxplot(
         var_labels = ["True", "Inferred (v1.0)", "Inferred (v0.4)"]
         colors = [color_dict["true"], color_dict["new"], color_dict["old"]]
     elif var == "overshoot":
-        vars = [f"{type}_max_overshoot", f"old_{type}_max_overshoot"]
-        var_labels = ["1.0a", "0.4"]
-        colors = ["royalblue", "darkorange"]
+        vars = [f"new_max_{type}_overshoot", f"old_max_{type}_overshoot"]
+        var_labels = ["v1.0", "v0.4"]
+        colors = [color_dict["new"], color_dict["old"]]
     else:
         raise ValueError("var must be 'span' or 'overlap_ratio'")
 

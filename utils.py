@@ -10,12 +10,13 @@ import pandas as pd
 import warnings
 import click
 from tsbrowse import preprocess
+import evaluation
 
 #warnings.simplefilter(action="ignore", category=FutureWarning)
 #warnings.simplefilter(action="ignore", category=UserWarning)
 
 
-def simulate(length_multiplier, folder, prefix, tsinfer, model='africa', seed=3, num_individuals=1000, **kwargs):
+def simulate(length_multiplier, folder, prefix, tsinfer, model='africa', seed=3, num_individuals=1000, prune=True, **kwargs):
     """
     Simulate genetic data and process using tsinfer.
 
@@ -48,8 +49,11 @@ def simulate(length_multiplier, folder, prefix, tsinfer, model='africa', seed=3,
         samples = {"bonobo": bonobo_count, "central": central_count, "western": western_count}
         engine = stdpopsim.get_engine("msprime")
         sim_ts = engine.simulate(model, contig, samples=samples, seed=seed, msprime_model='smc_prime')
-    tszip.compress(sim_ts, os.path.join(folder, f"{prefix}-simulated.trees.tsz"))
+
     print('Finished simulation')
+    if prune==True:
+        sim_ts = evaluation.prune_simulated_ts(sim_ts)
+    tszip.compress(sim_ts, os.path.join(folder, f"{prefix}-simulated.trees.tsz"))
     variant_data = tsinfer.SampleData.from_tree_sequence(sim_ts)
     return variant_data
 
@@ -118,52 +122,52 @@ def infer(variant_data, folder, prefix, tsinfer, version='1.0', num_threads=126)
         path=os.path.join(folder, f"{prefix}-{version}-ancestors.zarr")
     )
 
-    # Store linesweep results in a CSV file
-    matcher = tsinfer.AncestorMatcher(variant_data, ancestor_data)
-    ancestor_grouping = matcher.group_by_linesweep()
-    ancestors_per_epoch = np.zeros(len(ancestor_grouping) + 1)
-    for index, ancestors in ancestor_grouping.items():
-        ancestors_per_epoch[index] = len(ancestors)
-    df = pd.DataFrame({'ancestors_per_epoch': ancestors_per_epoch.astype(int)})
-    csv_path = os.path.join(folder, f"{prefix}-{version}-linesweep.csv")
-    df.to_csv(csv_path, index=False)
+        # # Store linesweep results in a CSV file
+    # matcher = tsinfer.AncestorMatcher(variant_data, ancestor_data)
+    # ancestor_grouping = matcher.group_by_linesweep()
+    # ancestors_per_epoch = np.zeros(len(ancestor_grouping) + 1)
+    # for index, ancestors in ancestor_grouping.items():
+    #     ancestors_per_epoch[index] = len(ancestors)
+    # df = pd.DataFrame({'ancestors_per_epoch': ancestors_per_epoch.astype(int)})
+    # csv_path = os.path.join(folder, f"{prefix}-{version}-linesweep.csv")
+    # df.to_csv(csv_path, index=False)
     
-    anc_ts = time_function(
-        func=tsinfer.match_ancestors,
-        version=version,
-        csv_path=perf_csv_path,
-        variant_data=variant_data,
-        ancestor_data=ancestor_data,
-        num_threads=num_threads,
-        path_compression=False,
-        progress_monitor=True
-    )
-    tszip.compress(anc_ts, os.path.join(folder, f"{prefix}-{version}-ancestor.trees.tsz"))
+    # anc_ts = time_function(
+    #     func=tsinfer.match_ancestors,
+    #     version=version,
+    #     csv_path=perf_csv_path,
+    #     variant_data=variant_data,
+    #     ancestor_data=ancestor_data,
+    #     num_threads=num_threads,
+    #     path_compression=False,
+    #     progress_monitor=True
+    # )
+    # tszip.compress(anc_ts, os.path.join(folder, f"{prefix}-{version}-ancestor.trees.tsz"))
 
-    raw_ts = time_function(
-        func=tsinfer.match_samples,
-        version=version,
-        csv_path=perf_csv_path,
-        variant_data=variant_data,
-        ancestors_ts=anc_ts,
-        num_threads=num_threads,
-        post_process=False,
-        path_compression=False,
-        progress_monitor=True
-    )
-    tszip.compress(raw_ts, os.path.join(folder, f"{prefix}-{version}-raw.trees.tsz"))
-    raw_ts_path_prefix = os.path.join(folder, f"{prefix}-{version}-raw")
-    preprocess.preprocess(raw_ts_path_prefix + '.trees.tsz', raw_ts_path_prefix + '.tsbrowse', show_progress=True)
+    # raw_ts = time_function(
+    #     func=tsinfer.match_samples,
+    #     version=version,
+    #     csv_path=perf_csv_path,
+    #     variant_data=variant_data,
+    #     ancestors_ts=anc_ts,
+    #     num_threads=num_threads,
+    #     post_process=False,
+    #     path_compression=False,
+    #     progress_monitor=True
+    # )
+    # tszip.compress(raw_ts, os.path.join(folder, f"{prefix}-{version}-raw.trees.tsz"))
+    # raw_ts_path_prefix = os.path.join(folder, f"{prefix}-{version}-raw")
+    # preprocess.preprocess(raw_ts_path_prefix + '.trees.tsz', raw_ts_path_prefix + '.tsbrowse', show_progress=True)
     
-    ts = tsinfer.post_process(raw_ts)
-    tszip.compress(ts, os.path.join(folder, f"{prefix}-{version}-post-processed.trees.tsz"))
+    # ts = tsinfer.post_process(raw_ts)
+    # tszip.compress(ts, os.path.join(folder, f"{prefix}-{version}-post-processed.trees.tsz"))
     
-    simp_ts = ts.simplify()
-    sdn_ts = tsdate.util.split_disjoint_nodes(simp_ts)
-    dated_ts = tsdate.date(sdn_ts, mutation_rate=1.29e-08, method='variational_gamma', progress=True)
-    dated_ts_path_prefix = os.path.join(folder, f"{prefix}-{version}-post-processed-dated")
-    tszip.compress(dated_ts, dated_ts_path_prefix + '.trees.tsz')
-    preprocess.preprocess(dated_ts_path_prefix + '.trees.tsz', dated_ts_path_prefix + '.tsbrowse', show_progress=True)
+    # simp_ts = ts.simplify()
+    # sdn_ts = tsdate.util.split_disjoint_nodes(simp_ts)
+    # dated_ts = tsdate.date(sdn_ts, mutation_rate=1.29e-08, method='variational_gamma', progress=True)
+    # dated_ts_path_prefix = os.path.join(folder, f"{prefix}-{version}-post-processed-dated")
+    # tszip.compress(dated_ts, dated_ts_path_prefix + '.trees.tsz')
+    # preprocess.preprocess(dated_ts_path_prefix + '.trees.tsz', dated_ts_path_prefix + '.tsbrowse', show_progress=True)
 
 
 def run(method, folder, prefix, version='1.0', num_threads=64, **kwargs):

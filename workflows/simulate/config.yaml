@@ -7,9 +7,9 @@ tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
 sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
-    interval: [1e6, 2e6]
-    samples: {"CEU": 200, "CHB": 100, "YRI": 100}
-    num_reps: 1
+    interval: [1e5, 3e5]
+    samples: {"CEU": 100, "CHB": 100, "YRI": 100}
+    num_reps: 2
     seed: 1
 
 versions:
