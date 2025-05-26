@@ -1,7 +1,8 @@
 import yaml
 import sys
-from pathlib import Path
-import steps
+#from pathlib import Path
+from lib import simulation, utils, errors
+import lib
 import json
 import tskit
 import pandas as pd
@@ -17,25 +18,12 @@ import stdpopsim
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore*")
 
 
-configfile: "config.yaml"
-
-
+configfile: "configs/anc_eval.yaml"
 sys.path.append(config["tsinfer_dir"])
 import tsinfer
-
 shell.prefix(config["prefix"])
 data_dir = Path(config["data_dir"])
 progress_dir = Path(config["progress_dir"])
-
-
-def ds_dir(wildcards):
-    model = wildcards.model
-    contig = wildcards.contig
-    length = wildcards.length
-    n = wildcards.n
-    rep = wildcards.rep
-    return data_dir / "zarr_vcfs" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}.zarr"
-
 
 def get_resource(rule_name, resource_type):
     if (
@@ -63,9 +51,10 @@ def expand_ancestor_paths():
     return [
         data_dir
         / "ancestors"
-        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-{version}-ancestors.zarr"
+        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}-{version}-ancestors.zarr"
         for model, contig, length, n, rep in sim_metadata()
         for version in config["versions"]
+        for error in config["error_types"]
     ]
 
 
@@ -73,8 +62,9 @@ def expand_data_frames():
     return [
         data_dir
         / "dataframes"
-        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-ancestors.csv"
+        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}-ancestors.csv"
         for model, contig, length, n, rep in sim_metadata()
+        for error in config["error_types"]
     ]
 
 
@@ -115,7 +105,7 @@ rule simulate:
         left, right = map(float, sim_entry["interval"])
         seed = sim_entry["seed"] + int(wildcards.rep)
 
-        arg = steps.simulate(
+        arg = simulation.simulate(
             model=wildcards.model,
             contig=wildcards.contig,
             samples=samples,
@@ -139,7 +129,7 @@ rule prune_simulated_ts:
         time_min=get_resource("intensive", "time_min"),
     run:
         arg = tskit.load(input[0])
-        arg = steps.prune_simulated_arg(arg)
+        arg = utils.prune_arg(arg)
         arg.dump(output[0])
 
 
@@ -157,9 +147,9 @@ rule filter_singletons:
         mem_mb=get_resource("intensive", "mem_mb"),
         time_min=get_resource("intensive", "time_min"),
     run:
-        ts = tskit.load(input[0])
-        ts = steps.remove_singletons(ts)
-        ts.dump(output[0])
+        arg = tskit.load(input[0])
+        arg = utils.remove_singletons(arg)
+        arg.dump(output[0])
 
 
 rule bio2zarr_convert:
@@ -170,7 +160,7 @@ rule bio2zarr_convert:
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}.zarr"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_none.zarr"
         / ".vcf_done",
     threads: get_resource("intensive", "threads")
     resources:
@@ -180,35 +170,40 @@ rule bio2zarr_convert:
         from bio2zarr import tskit as ts2zarr
         import shutil
 
-        ts_path = input[0]
+        arg_path = input[0]
         zarr_path = Path(output[0]).parent
-
         # Snakemake makes the directory first so we have to remove it
         if zarr_path.exists():
             shutil.rmtree(zarr_path)
 
-        arg = tskit.load(ts_path)
+        arg = tskit.load(arg_path)
         individuals_nodes = np.zeros((arg.num_individuals, 2), dtype=int)
         for individual in arg.individuals():
             id = individual.id
             individuals_nodes[id] = individual.nodes
 
         ts2zarr.convert(
-            ts_path=ts_path, zarr_path=zarr_path, individuals_nodes=individuals_nodes
+            ts_path=arg_path, zarr_path=zarr_path, individuals_nodes=individuals_nodes
         )
         Path(output[0]).touch()
+
+
+def ds_dir(wildcards):
+    model = wildcards.model
+    contig = wildcards.contig
+    length = wildcards.length
+    n = wildcards.n
+    rep = wildcards.rep
+    return data_dir / "zarr_vcfs" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_none.zarr"
 
 
 rule add_zarr_variables:
     input:
         lambda wildcards: ds_dir(wildcards) / ".vcf_done",
-        data_dir
-        / "simulated"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned-filtered.trees",
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}.zarr"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_none.zarr"
         / ".mods_done",
     threads: get_resource("add_zarr_variables", "threads")
     resources:
@@ -217,41 +212,54 @@ rule add_zarr_variables:
         runtime=get_resource("add_zarr_variables", "time_min"),
     run:
         ds = sgkit.load_dataset(Path(input[0]).parent, consolidated=False)
-        arg = tskit.load(input[1])
-        ac = np.sum(ds.call_genotype, axis=(1, 2))
-        # Need to ensure that we've removed singletons in TS and zarr
-        assert arg.num_sites == np.sum(ac.values > 1)
-        variables = {
-            "derived_count": ac,
-            "variant_singleton_mask": ac == 1,
-            "variant_ancestral_state": ds.variant_allele[:, 0],
-        }
-        ds.update(
-            {
-                name: xr.DataArray(data, dims=["variants"], name=name)
-                for name, data in variables.items()
-            }
+        utils.add_zarr_variables(
+            ds=ds,
+            output_path=Path(output[0]),
         )
-        sgkit.save_dataset(
-            ds.drop_vars(set(ds.data_vars) - set(variables.keys())),
-            ds_dir(wildcards),
-            mode="a",
-            consolidated=False,
-        )
-        Path(output[0]).touch()
 
+rule add_genotype_errors:
+    input:
+        data_dir
+        / "zarr_vcfs"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_none.zarr"
+        / ".mods_done",
+    output:
+        data_dir
+        / "zarr_vcfs"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_geno.zarr"
+        / ".mods_done",
+    threads: get_resource("add_genotype_errors", "threads")
+    resources:
+        mem_mb=get_resource("add_genotype_errors", "mem_mb"),
+        time_min=get_resource("add_genotype_errors", "time_min"),
+    run:
+        output_path = Path(output[0])
+        ds = sgkit.load_dataset(Path(input[0]).parent, consolidated=False)
+        errors.temp_add_genotype_errors(
+            ds=ds,
+            output_path=output_path,
+        )
+
+def zarr_with_errors(wildcards):
+    model = wildcards.model
+    contig = wildcards.contig
+    length = wildcards.length
+    n = wildcards.n
+    rep = wildcards.rep
+    error = wildcards.error
+    return data_dir / "zarr_vcfs" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}.zarr"
 
 rule generate_ancestors:
     input:
-        lambda wildcards: ds_dir(wildcards) / ".mods_done",
+        lambda wildcards: zarr_with_errors(wildcards) / ".mods_done",
     output:
         data_dir
         / "ancestors"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-{version}-ancestors.zarr",
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}-{version}-ancestors.zarr",
     log:
         progress_dir
         / "generate_ancestors"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-{version}.log",
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}-{version}.log",
     threads: get_resource("generate_ancestors", "threads")
     resources:
         mem_mb=get_resource("generate_ancestors", "mem_mb"),
@@ -259,7 +267,7 @@ rule generate_ancestors:
     shell:
         """
         source {config[env_dir]}/bin/activate
-        python generate_ancestors.py \
+        python scripts/generate_ancestors.py \
             {input} \
             {output} \
             {log} \
@@ -273,7 +281,7 @@ def expand_ancestors_by_version(wildcards):
         data_dir
         / "ancestors"
         / f"{wildcards.model}-{wildcards.contig}-{wildcards.length}mbp-"
-          f"n{wildcards.n}-rep{wildcards.rep}-{version}-ancestors.zarr"
+          f"n{wildcards.n}-rep{wildcards.rep}-errors_{wildcards.error}-{version}-ancestors.zarr"
         for version in config["versions"]
     ]
 
@@ -286,7 +294,7 @@ checkpoint build_ancestor_chunks:
     output:
         data_dir
         / "chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
         / "metadata.json",
     threads: get_resource("intensive", "threads")
     resources:
@@ -299,7 +307,7 @@ checkpoint build_ancestor_chunks:
         metadata_path = Path(output[0])
         output_dir = metadata_path.parent
         chunk_size = config["ancestor_chunk_size"]
-        steps.build_ancestor_chunks(
+        utils.build_ancestor_chunks(
             anc_data_list=anc_data_list,
             ts=ts,
             metadata_path=metadata_path,
@@ -308,24 +316,12 @@ checkpoint build_ancestor_chunks:
         )
 
 
-def chunk_ids(wildcards):
-    cp = checkpoints.build_ancestor_chunks.get(
-        model=wildcards.model,
-        contig=wildcards.contig,
-        length=wildcards.length,
-        n=wildcards.n,
-        rep=wildcards.rep,
-    )
-    with open(cp.output[0]) as f:
-        metadata = json.load(f)
-    return list(range(metadata["num_chunks"]))
-
 
 def chunk_input(wildcards):
     return (
         data_dir
         / "chunks"
-        / f"{wildcards.model}-{wildcards.contig}-{wildcards.length}mbp-n{wildcards.n}-rep{wildcards.rep}"
+        / f"{wildcards.model}-{wildcards.contig}-{wildcards.length}mbp-n{wildcards.n}-rep{wildcards.rep}-errors_{wildcards.error}"
         / f"unprocessed-chunk-{wildcards.chunk_id}.csv"
     )
 
@@ -333,19 +329,19 @@ def chunk_input(wildcards):
 rule process_ancestor_chunk:
     input:
         chunk=chunk_input,
-        ts_path=data_dir
+        arg_path=data_dir
         / "simulated"
         / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned-filtered.trees",
         anc_data_paths=expand_ancestors_by_version,
     output:
         data_dir
         / "chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
         / "processed-chunk-{chunk_id}.csv",
     log:
         progress_dir
         / "process_chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
         / "process-chunk-{chunk_id}.log",
     threads: get_resource("process_ancestor_chunk", "threads")
     resources:
@@ -360,7 +356,7 @@ rule process_ancestor_chunk:
                 df = pd.read_csv(chunk_path)
                 assert len(df) > 0
                 print(f"[INFO] Loading tree sequence", flush=True)
-                ts = tskit.load(input.ts_path)
+                ts = tskit.load(input.arg_path)
                 sites_position = np.append(ts.sites_position, ts.sequence_length)
                 versions = config["versions"]
                 print(f"[INFO] Importing AncestorData", flush=True)
@@ -369,7 +365,7 @@ rule process_ancestor_chunk:
                     for path, version in zip(input.anc_data_paths, versions)
                 }
                 print(f"[INFO] Starting DF generation", flush=True)
-                steps.process_ancestor_chunk(
+                utils.process_ancestor_chunk(
                     df=df,
                     ts=ts,
                     sites_position=sites_position,
@@ -379,25 +375,40 @@ rule process_ancestor_chunk:
                 )
 
 
+def chunk_ids(wildcards):
+    cp = checkpoints.build_ancestor_chunks.get(
+        model=wildcards.model,
+        contig=wildcards.contig,
+        length=wildcards.length,
+        n=wildcards.n,
+        rep=wildcards.rep,
+        error=wildcards.error,
+    )
+    with open(cp.output[0]) as f:
+        metadata = json.load(f)
+    return list(range(metadata["num_chunks"]))
+
+
 rule process_all_chunks:
     input:
         lambda wildcards: expand(
             data_dir
             / "chunks"
-            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
             / "processed-chunk-{chunk_id}.csv",
             model=[wildcards.model],
             contig=[wildcards.contig],
             length=[wildcards.length],
             n=[wildcards.n],
             rep=[wildcards.rep],
+            error=[wildcards.error],
             chunk_id=chunk_ids(wildcards),
         ),
     output:
         temp(
             data_dir
             / "chunks"
-            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
             / ".processed"
         ),
     run:
@@ -411,6 +422,7 @@ def aggregate_chunk_paths(wildcards):
         length=wildcards.length,
         n=wildcards.n,
         rep=wildcards.rep,
+        error=wildcards.error,
     )
     chunk_dir = Path(cp.output[0]).parent
     return sorted(str(p) for p in chunk_dir.glob("processed-chunk-*.csv"))
@@ -420,13 +432,13 @@ rule aggregate_ancestor_chunks:
     input:
         processed=data_dir
         / "chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}"
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}"
         / ".processed",
         chunks=aggregate_chunk_paths,
     output:
         data_dir
         / "dataframes"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-ancestors.csv",
+        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-errors_{error}-ancestors.csv",
     threads: get_resource("aggregate_ancestor_chunks", "threads")
     resources:
         mem_mb=get_resource("aggregate_ancestor_chunks", "mem_mb"),

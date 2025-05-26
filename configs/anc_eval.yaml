@@ -1,17 +1,18 @@
 prefix: "set -euo pipefail; "
-data_dir: "data"
-progress_dir: "data/progress"
+data_dir: "data/anc_eval"
+progress_dir: "data/anc_eval/progress"
 env_dir: "/well/kelleher/users/uuc395/tsinfer-paper/env"
 tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
+genotyping_error_probs: "data/external/EmpiricalErrorPlatinum1000G.csv"
 
 sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
-    interval: [1e5, 3e5]
-    samples: {"CEU": 100, "CHB": 100, "YRI": 100}
-    num_reps: 2
+    interval: [1e5, 2e5]
+    samples: {"CEU": 100, "CHB": 50, "YRI": 50}
+    num_reps: 1
     seed: 1
-
+error_types: ["none", "geno"]
 versions:
   - "v0.4"
   - "v1.0"
@@ -25,13 +26,13 @@ resources:
     time_min: 500
 
   intensive:
-    threads: 62
-    mem_mb: 250000
+    threads: 124
+    mem_mb: 512000
     time_min: 500
 
   generate_ancestors:
-    threads: 62
-    mem_mb: 250000
+    threads: 124
+    mem_mb: 512000
     time_min: 500
 
   process_ancestor_chunk:

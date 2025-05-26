@@ -1,5 +1,6 @@
-data/
-results/
+data/anc_eval/
 __pycache__/
 env/
-*.ipynb
+notebooks/
+.snakemake/
+.ipynb_checkpoints/

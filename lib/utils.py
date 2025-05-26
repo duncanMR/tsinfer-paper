@@ -1,58 +1,14 @@
-import stdpopsim
 import numpy as np
-import tskit
+import sgkit
+import xarray as xr
 import pandas as pd
-import os
-import sys
 import json
+import tskit
 import csv
-from pathlib import Path
 from tqdm import tqdm
 
 
-def simulate(model, contig, samples, left, right, seed):
-    species = stdpopsim.get_species("HomSap")
-    model = species.get_demographic_model(model)
-    contig = species.get_contig(
-        contig,
-        mutation_rate=model.mutation_rate,
-        left=left,
-        right=right,
-        #genetic_map="HapMapII_GRCh38",
-    )
-    engine = stdpopsim.get_engine("msprime")
-    arg = engine.simulate(model, contig, samples, seed=seed, msprime_model="smc_prime")
-    return arg
-
-
-def prune_simulated_arg(arg):
-    mutations_count = np.bincount(arg.mutations_site, minlength=arg.num_sites)
-    recurrent = np.where(mutations_count > 1)[0]
-    muts_to_remove = []
-    for site_id in recurrent:
-        muts = arg.site(site_id).mutations
-        assert len(muts) > 1
-        for mut in muts[1:]:
-            muts_to_remove.append(mut.id)
-    tables = arg.dump_tables()
-    mutations = tables.mutations
-    tables.mutations.keep_rows(
-        np.isin(range(len(mutations)), muts_to_remove, invert=True)
-    )
-    return tables.tree_sequence()
-
-
-def remove_singletons(ts):
-    sites_to_remove = []
-    for variant in ts.variants():
-        if np.sum(variant.genotypes > 0) == 1:
-            sites_to_remove.append(variant.site.id)
-    return ts.delete_sites(sites_to_remove)
-
-
 def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_path):
-    metadata_path = Path(metadata_path)
-
     base_anc_data = anc_data_list[0]
     for anc_data in anc_data_list[1:]:
         assert base_anc_data.num_ancestors == anc_data.num_ancestors
@@ -220,3 +176,53 @@ def process_ancestor_chunk(df, ts, sites_position, anc_data_dict, rep, output_pa
             writer.writerow(record)
 
     print(f"[INFO] Finished writing chunk {output_path}")
+
+
+def prune_arg(arg):
+    mutations_count = np.bincount(arg.mutations_site, minlength=arg.num_sites)
+    recurrent = np.where(mutations_count > 1)[0]
+    muts_to_remove = []
+    for site_id in recurrent:
+        muts = arg.site(site_id).mutations
+        assert len(muts) > 1
+        for mut in muts[1:]:
+            muts_to_remove.append(mut.id)
+    tables = arg.dump_tables()
+    mutations = tables.mutations
+    tables.mutations.keep_rows(
+        np.isin(range(len(mutations)), muts_to_remove, invert=True)
+    )
+    return tables.tree_sequence()
+
+def remove_singletons(arg):
+    sites_to_remove = []
+    for variant in arg.variants():
+        if np.sum(variant.genotypes > 0) == 1:
+            sites_to_remove.append(variant.site.id)
+    return arg.delete_sites(sites_to_remove)
+
+def add_zarr_variables(ds, output_path):
+    G = ds.call_genotype
+    ac = np.sum(G, axis=(1, 2))
+    an = G.shape[1]*2 #num_samples*2
+    af = ac / an
+    assert np.all(af <= 1)
+    variables = {
+        "variant_allele_count": ac,
+        "variant_allele_frequency": af,
+        "variant_singleton_mask": ac == 1,
+        "variant_ancestral_state": ds.variant_allele[:, 0],
+    }
+    arrays = {
+            name: xr.DataArray(data, dims=["variants"], name=name)
+            for name, data in variables.items()
+        }
+    ds.update(arrays)
+
+    sgkit.save_dataset(
+            ds.drop_vars(set(ds.data_vars) - set(arrays.keys())),
+            output_path.parent,
+            mode="a",
+            consolidated=False,
+        )
+    output_path.touch()
