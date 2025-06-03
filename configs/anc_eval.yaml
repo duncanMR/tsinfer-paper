@@ -3,21 +3,33 @@ data_dir: "data/anc_eval"
 progress_dir: "data/anc_eval/progress"
 env_dir: "/well/kelleher/users/uuc395/tsinfer-paper/env"
 tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
-genotyping_error_probs: "data/external/EmpiricalErrorPlatinum1000G.csv"
+error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
 
 sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
-    interval: [1e5, 2e5]
-    samples: {"CEU": 100, "CHB": 50, "YRI": 50}
+    interval: [1e7, 1.5e7]
+    samples: {"CEU": 1000, "CHB": 500, "YRI": 500}
     num_reps: 1
     seed: 1
-error_types: ["none", "geno"]
-versions:
-  - "v0.4"
-  - "v1.0"
 
-ancestor_chunk_size: 1000
+genotype_errors:
+#  - 'enabled'
+  - 'disabled'
+
+switch_error_rate:
+  - 0
+ # - 1e-3
+
+mispolarisation_error_rate:
+  - 0
+#  - 1e-2
+
+versions:
+  - "0.4"
+  - "1.0"
+
+ancestor_chunk_size: 10000
 
 resources:
   default:
@@ -36,6 +48,6 @@ resources:
     time_min: 500
 
   process_ancestor_chunk:
-    threads: 2
-    mem_mb: 8000
+    threads: 1
+    mem_mb: 16000
     time_min: 500

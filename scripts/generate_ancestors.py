@@ -18,24 +18,23 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore i
 def generate_ancestors(input, output, log, version, threads, data_dir):
     """Generate ancestors from a tree sequence."""
 
-    if version == "v1.0":
+    if version == "1.0":
         tsinfer_path = os.path.abspath("/well/kelleher/users/uuc395/tsinfer")
-    elif version == "v0.4":
+    elif version == "0.4":
         tsinfer_path = os.path.abspath("/well/kelleher/users/uuc395/tsinfer-0.4")
     else:
-        raise ValueError("Version must be either 'v1.0' or 'v0.4'")
+        raise ValueError("Version must be either '1.0' or '0.4'")
 
     sys.path.append(tsinfer_path)
     import tsinfer
     data_dir = Path(data_dir)
     vdata = tsinfer.VariantData(
         input.replace(".mods_done", ""),
-        site_mask="variant_singleton_mask",
-        ancestral_state="variant_ancestral_state",
+        ancestral_state="variant_mispolarised_ancestral_state",
     )
     assert vdata.num_sites > 0
 
-    with open(log[0], "w") as log_f:
+    with open(log, "w") as log_f:
         ancestors = tsinfer.generate_ancestors(
             vdata,
             path=output,
