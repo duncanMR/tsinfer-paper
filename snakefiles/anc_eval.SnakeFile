@@ -1,6 +1,5 @@
 import yaml
 import sys
-#from pathlib import Path
 import json
 import tskit
 import pandas as pd
@@ -39,77 +38,71 @@ def sim_metadata():
     for sim in config["sims"]:
         model = sim["model"]
         contig = sim["contig"]
-        left, right = map(float, sim["interval"])
+        left = sim["left"]
+        right = sim["right"]
         samples = sim["samples"]
         n = sum(samples.values())
-        length = f"{(right - left) * 1e-6:.1f}"
+        seed = sim["seed"]
         for rep in range(sim["num_reps"]):
-            yield model, contig, length, n, rep
+            yield model, contig, left, right, n, seed, rep
 
 
 def expand_data_frames():
     return [
         data_dir
         / "dataframes"
-        / f"{model}-{contig}-{length}mbp-n{n}-aggregated.csv"
-        for model, contig, length, n, rep in sim_metadata()
+        / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-aggregated.csv"
+        for model, contig, left, right, n, seed, rep in sim_metadata()
     ]
 
 rule all:
     input:
-        #expand_ancestor_paths(),
         expand_data_frames(),
 
 
 rule simulate:
     output:
-        data_dir / "simulated" / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.trees",
+        data_dir / "simulated" / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.trees",
     threads: get_resource("intensive", "threads")
     resources:
         mem_mb=get_resource("intensive", "mem_mb"),
         time_min=get_resource("intensive", "time_min"),
     run:
         def match_sim_entry(wildcards):
-            target_length = float(wildcards.length)
-            target_n = int(wildcards.n)
-            for entry in config["sims"]:
-                left, right = map(float, entry["interval"])
-                length = (right - left) * 1e-6
-                n = sum(entry["samples"].values())
+            for sim in config["sims"]:
+                n = sum(sim["samples"].values())   
                 if (
-                    entry["model"] == wildcards.model
-                    and entry["contig"] == wildcards.contig
-                    and math.isclose(length, target_length, rel_tol=1e-4)
-                    and n == target_n
+                    sim["model"] == wildcards.model
+                    and sim["contig"] == wildcards.contig
+                    and math.isclose(float(sim["left"]), float(wildcards.left), rel_tol=1e-4)
+                    and math.isclose(float(sim["right"]), float(wildcards.right), rel_tol=1e-4)
+                    and n == int(wildcards.n)
+                    and int(sim["seed"]) == int(wildcards.seed)
                 ):
-                    return entry
+                    for rep in range(sim["num_reps"]):
+                        return sim
             raise ValueError(f"No matching sim entry for wildcards: {wildcards}")
-
 
         sim_entry = match_sim_entry(wildcards)
         samples = sim_entry["samples"]
-        n = sum(samples.values())
-        left, right = map(float, sim_entry["interval"])
-        seed = sim_entry["seed"] + int(wildcards.rep)
-
         arg = simulation.simulate(
             model=wildcards.model,
             contig=wildcards.contig,
             samples=samples,
-            left=left,
-            right=right,
-            seed=seed,
+            left=float(wildcards.left),
+            right=float(wildcards.right),
+            seed=int(wildcards.seed) + int(wildcards.rep),
         )
         arg.dump(output[0])
 
 
 rule prune_simulated_ts:
     input:
-        data_dir / "simulated" / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.trees",
+        data_dir / "simulated" / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.trees",
     output:
         data_dir
         / "simulated"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned.trees",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
     threads: get_resource("intensive", "threads")
     resources:
         mem_mb=get_resource("intensive", "mem_mb"),
@@ -123,11 +116,11 @@ rule bio2zarr_convert:
     input:
         data_dir
         / "simulated"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned.trees",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.zarr"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.zarr"
         / ".vcf_done",
     threads: get_resource("intensive", "threads")
     resources:
@@ -158,10 +151,13 @@ rule bio2zarr_convert:
 def ds_dir(wildcards):
     model = wildcards.model
     contig = wildcards.contig
-    length = wildcards.length
+    left = wildcards.left
+    right = wildcards.right
     n = wildcards.n
+    seed = wildcards.seed
     rep = wildcards.rep
-    return data_dir / "zarr_vcfs" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.zarr"
+    
+    return data_dir / "zarr_vcfs" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.zarr"
 
 
 rule add_zarr_variables:
@@ -170,7 +166,7 @@ rule add_zarr_variables:
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.zarr"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.zarr"
         / ".mods_done",
     threads: get_resource("add_zarr_variables", "threads")
     resources:
@@ -188,12 +184,12 @@ rule add_errors:
     input:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-raw.zarr"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.zarr"
         / ".mods_done",
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}.zarr"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}.zarr"
         / ".mods_done",
     threads: get_resource("add_genotype_errors", "threads")
     resources:
@@ -208,6 +204,7 @@ rule add_errors:
         mispol_error_rate=float(wildcards.mper)
         assert 0 <= switch_error_rate <= 1
         assert 0 <= mispol_error_rate <= 1
+        seed = int(wildcards.seed) + int(wildcards.rep)
         errors.add_errors(
             ds=ds,
             output_path=output_path,
@@ -215,19 +212,21 @@ rule add_errors:
             genotype_errors_type=wildcards.gerr,
             switch_error_rate=switch_error_rate,
             mispol_error_rate=mispol_error_rate,
-            seed=2,
+            seed=seed,
         )
 
 def zarr_with_errors(wildcards):
     model = wildcards.model
     contig = wildcards.contig
-    length = wildcards.length
+    left = wildcards.left
+    right = wildcards.right
     n = wildcards.n
+    seed = wildcards.seed
     rep = wildcards.rep
     gerr = wildcards.gerr
     ser = wildcards.ser
     mper = wildcards.mper
-    return data_dir / "zarr_vcfs" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}.zarr"
+    return data_dir / "zarr_vcfs" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}.zarr"
 
 rule generate_ancestors:
     input:
@@ -235,11 +234,11 @@ rule generate_ancestors:
     output:
         data_dir
         / "ancestors"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}-ancestors.zarr",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}-ancestors.zarr",
     log:
         progress_dir
         / "generate_ancestors"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}.log",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}.log",
     threads: get_resource("generate_ancestors", "threads")
     resources:
         mem_mb=get_resource("generate_ancestors", "mem_mb"),
@@ -259,15 +258,17 @@ rule generate_ancestors:
 def expand_ancestors_by_version(wildcards):
     model = wildcards.model
     contig = wildcards.contig
-    length = wildcards.length
+    left = wildcards.left
+    right = wildcards.right
     n = wildcards.n
+    seed = wildcards.seed
     rep = wildcards.rep
     gerr = wildcards.gerr
     ser = wildcards.ser
     mper = wildcards.mper
 
     return [
-        data_dir / "ancestors" / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}-ancestors.zarr"
+        data_dir / "ancestors" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}-ancestors.zarr"
         for version in config["versions"]
     ]
 
@@ -275,12 +276,12 @@ checkpoint build_ancestor_chunks:
     input:
         data_dir
         / "simulated"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned.trees",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
         expand_ancestors_by_version,
     output:
         data_dir
         / "chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}"
         / "metadata.json",
     threads: get_resource("intensive", "threads")
     resources:
@@ -304,8 +305,10 @@ checkpoint build_ancestor_chunks:
 def chunk_input(wildcards):
     model = wildcards.model
     contig = wildcards.contig
-    length = wildcards.length
+    left = wildcards.left
+    right = wildcards.right
     n = wildcards.n
+    seed = wildcards.seed
     rep = wildcards.rep
     gerr = wildcards.gerr
     ser = wildcards.ser
@@ -314,7 +317,7 @@ def chunk_input(wildcards):
     return (
         data_dir 
         / "chunks" 
-        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+        / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
         / f"unprocessed-chunk-{chunk_id}.csv"
     )
     
@@ -324,17 +327,17 @@ rule process_ancestor_chunk:
         chunk=chunk_input,
         arg_path=data_dir
         / "simulated"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-pruned.trees",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
         anc_data_paths=expand_ancestors_by_version,
     output:
         data_dir 
         / "chunks" 
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
         / "processed-chunk-{chunk_id}.csv"
     log:
         progress_dir 
         / "process_chunks" 
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
         / "processed-chunk-{chunk_id}.log"
     threads: get_resource("process_ancestor_chunk", "threads")
     resources:
@@ -372,8 +375,10 @@ def get_checkpoint(wildcards):
     cp = checkpoints.build_ancestor_chunks.get(
         model=wildcards.model,
         contig=wildcards.contig,
-        length=wildcards.length,
+        left=wildcards.left,
+        right=wildcards.right,
         n=wildcards.n,
+        seed=wildcards.seed,
         rep=wildcards.rep,
         gerr=wildcards.gerr,
         ser=wildcards.ser,
@@ -392,23 +397,25 @@ rule process_all_chunks:
         lambda wildcards: expand(
             data_dir 
             / "chunks" 
-            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
             / "processed-chunk-{chunk_id}.csv",
-            model=[wildcards.model],
-            contig=[wildcards.contig],
-            length=[wildcards.length],
-            n=[wildcards.n],
-            rep=[wildcards.rep],
-            gerr=[wildcards.gerr],
-            ser=[wildcards.ser],
-            mper=[wildcards.mper],
+            model=wildcards.model,
+            contig=wildcards.contig,
+            left = wildcards.left,
+            right = wildcards.right,
+            n = wildcards.n,
+            seed = wildcards.seed,
+            rep=wildcards.rep,
+            gerr=wildcards.gerr,
+            ser=wildcards.ser,
+            mper=wildcards.mper,
             chunk_id=chunk_ids(wildcards),
         ),
     output:
         temp(
             data_dir 
             / "chunks" 
-            / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
             / ".processed"
         ),
     run:
@@ -425,13 +432,13 @@ checkpoint aggregate_ancestor_chunks:
     input:
         processed=data_dir
         / "chunks"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
         / ".processed",
         chunks=aggregate_chunk_paths,
     output:
         data_dir
         / "dataframes"
-        / "{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv",
     threads: get_resource("aggregate_ancestor_chunks", "threads")
     resources:
         mem_mb=get_resource("aggregate_ancestor_chunks", "mem_mb"),
@@ -442,21 +449,27 @@ checkpoint aggregate_ancestor_chunks:
 
 
 def aggregated_dataframe_paths(wildcards):
-    model = wildcards.model
-    contig = wildcards.contig
-    length = wildcards.length
-    n = int(wildcards.n)
     paths = []
-    for _, _, _, _, rep in sim_metadata():
-        for err_conf in config["error_configs"]:
-            gerr = err_conf["genotype_errors"]
-            ser = err_conf["switch_error_rate"]
-            mper = err_conf["mispolarisation_error_rate"]
-            paths.append(
-                data_dir
-                / "dataframes"
-                / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv"
-            )
+    for model, contig, left, right, n, seed, rep in sim_metadata():
+        if (
+            model == wildcards.model
+            and contig == wildcards.contig
+            and math.isclose(float(left), float(wildcards.left), rel_tol=1e-4)
+            and math.isclose(float(right), float(wildcards.right), rel_tol=1e-4)
+            and int(n) == int(wildcards.n)
+            and int(seed) == int(wildcards.seed)
+        ):
+            for err_conf in config["error_configs"]:
+                gerr = err_conf["genotype_errors"]
+                ser = err_conf["switch_error_rate"]
+                mper = err_conf["mispolarisation_error_rate"]
+                paths.append(
+                    data_dir
+                    / "dataframes"
+                    / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv"
+                )
+    
+    assert len(paths) > 0
     return paths
 
     
@@ -467,7 +480,7 @@ rule finalize_all_dataframes:
         temp(
             data_dir
             / "dataframes"
-            / "{model}-{contig}-{length}mbp-n{n}.finalized"
+            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}.finalized"
         )
     run:
         Path(output[0]).touch()
@@ -476,12 +489,12 @@ rule aggregate_dataframes:
     input:
         finalized=data_dir
         / "dataframes"
-        / "{model}-{contig}-{length}mbp-n{n}.finalized",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}.finalized",
         dfs=aggregated_dataframe_paths,
     output:
         data_dir
         / "dataframes"
-        / "{model}-{contig}-{length}mbp-n{n}-aggregated.csv",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-aggregated.csv",
     threads: get_resource("aggregate_dataframes", "threads")
     resources:
         mem_mb=get_resource("aggregate_dataframes", "mem_mb"),

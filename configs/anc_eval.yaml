@@ -8,10 +8,11 @@ error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
 sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
-    interval: [5e6, 6e6]
-    samples: {"CEU": 100, "CHB": 100, "YRI": 100}
-    num_reps: 2
-    seed: 2
+    left: 1e7
+    right: 2e7
+    samples: {"CEU": 2000, "CHB": 600, "YRI": 600}
+    num_reps: 3
+    seed: 1
 
 error_configs:
   - genotype_errors: 'disabled'
@@ -20,16 +21,16 @@ error_configs:
   - genotype_errors: 'enabled'
     switch_error_rate: 0
     mispolarisation_error_rate: 0
-  # - genotype_errors: 'disabled'
-  #   switch_error_rate: 5e-3
-  #   mispolarisation_error_rate: 0
-  # - genotype_errors: 'disabled'
-  #   switch_error_rate: 0
-  #   mispolarisation_error_rate: 4e-2
+  - genotype_errors: 'disabled'
+    switch_error_rate: 5e-3
+    mispolarisation_error_rate: 0
+  - genotype_errors: 'disabled'
+    switch_error_rate: 0
+    mispolarisation_error_rate: 4e-2
 
 versions:
-  - "0.4"
-  - "1.0"
+  - 0.4
+  - 1.0
 
 ancestor_chunk_size: 10000
 

@@ -7,8 +7,8 @@ def simulate(model, contig, samples, left, right, seed):
     contig = species.get_contig(
         contig,
         mutation_rate=model.mutation_rate,
-        left=left,
-        right=right,
+        left=float(left),
+        right=float(right),
         genetic_map="HapMapII_GRCh38",
     )
     engine = stdpopsim.get_engine("msprime")
