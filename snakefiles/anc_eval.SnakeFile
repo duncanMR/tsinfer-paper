@@ -47,34 +47,17 @@ def sim_metadata():
             yield model, contig, length, n, rep
 
 
-def expand_ancestor_paths():
-    return [
-        data_dir
-        / "ancestors" 
-        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-v{version}-ancestors.zarr"
-        for model, contig, length, n, rep in sim_metadata()
-        for version in config["versions"]
-        for gerr in config["genotype_errors"]
-        for ser in config["switch_error_rate"]
-        for mper in config["mispolarisation_error_rate"]
-    ]
-
-
 def expand_data_frames():
     return [
         data_dir
         / "dataframes"
-        / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv"
+        / f"{model}-{contig}-{length}mbp-n{n}-aggregated.csv"
         for model, contig, length, n, rep in sim_metadata()
-        for gerr in config["genotype_errors"]
-        for ser in config["switch_error_rate"]
-        for mper in config["mispolarisation_error_rate"]
     ]
-
 
 rule all:
     input:
-        expand_ancestor_paths(),
+        #expand_ancestor_paths(),
         expand_data_frames(),
 
 
@@ -385,8 +368,7 @@ rule process_ancestor_chunk:
                     output_path=output[0],
                 )
 
-
-def chunk_ids(wildcards):
+def get_checkpoint(wildcards):
     cp = checkpoints.build_ancestor_chunks.get(
         model=wildcards.model,
         contig=wildcards.contig,
@@ -397,10 +379,13 @@ def chunk_ids(wildcards):
         ser=wildcards.ser,
         mper=wildcards.mper,
     )
+    return cp
+
+def chunk_ids(wildcards):
+    cp = get_checkpoint(wildcards)
     with open(cp.output[0]) as f:
         metadata = json.load(f)
     return list(range(metadata["num_chunks"]))
-
 
 rule process_all_chunks:
     input:
@@ -431,21 +416,12 @@ rule process_all_chunks:
 
 
 def aggregate_chunk_paths(wildcards):
-    cp = checkpoints.build_ancestor_chunks.get(
-        model=wildcards.model,
-        contig=wildcards.contig,
-        length=wildcards.length,
-        n=wildcards.n,
-        rep=wildcards.rep,
-        gerr=wildcards.gerr,
-        ser=wildcards.ser,
-        mper=wildcards.mper,
-    )
+    cp = get_checkpoint(wildcards)
     chunk_dir = Path(cp.output[0]).parent
     return sorted(str(p) for p in chunk_dir.glob("processed-chunk-*.csv"))
 
  
-rule aggregate_ancestor_chunks:
+checkpoint aggregate_ancestor_chunks:
     input:
         processed=data_dir
         / "chunks"
@@ -461,7 +437,56 @@ rule aggregate_ancestor_chunks:
         mem_mb=get_resource("aggregate_ancestor_chunks", "mem_mb"),
         time_min=get_resource("aggregate_ancestor_chunks", "time_min"),
     run:
-        import pandas as pd
-
         dfs = [pd.read_csv(p) for p in input.chunks]
         pd.concat(dfs, ignore_index=True).to_csv(output[0], index=False)
+
+
+def aggregated_dataframe_paths(wildcards):
+    model = wildcards.model
+    contig = wildcards.contig
+    length = wildcards.length
+    n = int(wildcards.n)
+    paths = []
+    for _, _, _, _, rep in sim_metadata():
+        for err_conf in config["error_configs"]:
+            gerr = err_conf["genotype_errors"]
+            ser = err_conf["switch_error_rate"]
+            mper = err_conf["mispolarisation_error_rate"]
+            paths.append(
+                data_dir
+                / "dataframes"
+                / f"{model}-{contig}-{length}mbp-n{n}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}-ancestors.csv"
+            )
+    return paths
+
+    
+rule finalize_all_dataframes:
+    input:
+        aggregated_dataframe_paths
+    output:
+        temp(
+            data_dir
+            / "dataframes"
+            / "{model}-{contig}-{length}mbp-n{n}.finalized"
+        )
+    run:
+        Path(output[0]).touch()
+
+rule aggregate_dataframes:
+    input:
+        finalized=data_dir
+        / "dataframes"
+        / "{model}-{contig}-{length}mbp-n{n}.finalized",
+        dfs=aggregated_dataframe_paths,
+    output:
+        data_dir
+        / "dataframes"
+        / "{model}-{contig}-{length}mbp-n{n}-aggregated.csv",
+    threads: get_resource("aggregate_dataframes", "threads")
+    resources:
+        mem_mb=get_resource("aggregate_dataframes", "mem_mb"),
+        time_min=get_resource("aggregate_dataframes", "time_min"),
+    run:
+        dfs = [pd.read_csv(p) for p in input.dfs]
+        pd.concat(dfs, ignore_index=True).to_csv(output[0], index=False)
+

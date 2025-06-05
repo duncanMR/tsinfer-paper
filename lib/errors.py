@@ -10,7 +10,11 @@ def fetch_empirical_probs(freq, df):
     The input frequency should be between 0 and 1, inclusive.
     """
     error_freq = df.freq.values
-    assert freq >= error_freq.min() and freq <= error_freq.max()
+    assert 0 <= freq <= 1
+    if freq < error_freq.min():
+        freq = error_freq.min()
+    elif freq > error_freq.max():
+        freq = error_freq.max()
     # Last row has frequency 1.0 exactly, so we can use 'right' to fetch that row
     # correctly.
     row = df.loc[np.searchsorted(error_freq, freq, side='right')]

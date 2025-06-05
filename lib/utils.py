@@ -82,17 +82,7 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
                 }
             )
 
-    long_df = pd.DataFrame.from_records(records)
-    df = (
-        long_df.groupby(["inf_node", "true_node"])
-        .agg({"inf_focal_site": list, "true_focal_site": list, "focal_position": list})
-        .reset_index()
-    )
-    df = df.rename(
-        columns={"inf_focal_site": "inf_focal_sites",
-                 "true_focal_site": "true_focal_sites",
-                 "focal_position": "focal_positions"}
-    )
+    df = pd.DataFrame.from_records(records)
     assert len(df) > 0
     assert not df.isnull().values.any()
 
@@ -165,6 +155,7 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
             a = true_genotypes[true_node_index]
             a_shared = a[true_shared_idx]
             segment = np.where(a_shared != tskit.MISSING_DATA)[0]
+            assert len(segment) > 0
             true_left = segment[0]
             true_right = segment[-1] + 1
             true_full_haplotype = (a_shared > 0).astype("int8")
@@ -180,9 +171,9 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
                 "genotype_errors_added": geno_errors,
                 "switch_error_rate": switch_error_rate,
                 "mispolarisation_error_rate": mispol_error_rate,
-                "inf_focal_sites": row.inf_focal_sites,
-                "true_focal_sites": row.true_focal_sites,
-                "focal_positions": row.focal_positions,
+                "inf_focal_site": row.inf_focal_site,
+                "true_focal_site": row.true_focal_site,
+                "focal_position": row.focal_position,
                 "true_time": true_time,
                 "true_site_left": true_left,
                 "true_site_right": true_right,
@@ -226,21 +217,21 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
                 inf_pos_right = shared_pos[inf_right]
                 record.update(
                     {
-                        f"inferred_site_left_{version}": inf_left,
-                        f"inferred_site_right_{version}": inf_right,
-                        f"inferred_site_span_{version}": inf_right - inf_left,
-                        f"inferred_overshoot_left_{version}": true_left - inf_left,
-                        f"inferred_overshoot_right_{version}": inf_right - true_right,
-                        f"inferred_pos_left_{version}": inf_pos_left,
-                        f"inferred_pos_right_{version}": inf_pos_right,
-                        f"inferred_pos_span_{version}": inf_pos_right - inf_pos_left,
-                        f"inferred_pos_overshoot_left_{version}": true_pos_left
+                        f"inferred_site_left_v{version}": inf_left,
+                        f"inferred_site_right_v{version}": inf_right,
+                        f"inferred_site_span_v{version}": inf_right - inf_left,
+                        f"inferred_site_overshoot_left_v{version}": true_left - inf_left,
+                        f"inferred_site_overshoot_right_v{version}": inf_right - true_right,
+                        f"inferred_pos_left_v{version}": inf_pos_left,
+                        f"inferred_pos_right_v{version}": inf_pos_right,
+                        f"inferred_pos_span_v{version}": inf_pos_right - inf_pos_left,
+                        f"inferred_pos_overshoot_left_v{version}": true_pos_left
                         - inf_pos_left,
-                        f"inferred_pos_overshoot_right_{version}": inf_pos_right
+                        f"inferred_pos_overshoot_right_v{version}": inf_pos_right
                         - true_pos_right,
-                        f"num_errors_{version}": np.sum(errors),
-                        f"num_should_be_0_{version}": np.sum(should_be_0),
-                        f"num_should_be_1_{version}": np.sum(should_be_1),
+                        f"num_errors_v{version}": np.sum(errors),
+                        f"num_should_be_0_v{version}": np.sum(should_be_0),
+                        f"num_should_be_1_v{version}": np.sum(should_be_1),
                     }
                 )
 

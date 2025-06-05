@@ -106,13 +106,13 @@ def plot_ancestor_boxplot(
     y_log=False,
     save_path=None,
     color_dict={
-        "new": "#d62728",  # red
-        "old": "#ff7f0e",  # orange
-        "true": "#1f77b4",  # blue
+        "new": "#d62728",  
+        "old": "#ff7f0e", 
+        "true": "#1f77b4",
     },
 ):
     df = df.copy()  # To avoid SettingWithCopyWarning
-    df = df.drop_duplicates(subset="inferred_index", keep="first")
+    df = df.drop_duplicates(subset="inferred_node", keep="first")
     if cutoffs is None:
         cutoffs = np.unique(np.percentile(df["inferred_time"], np.linspace(0, 100, 9)))
 
@@ -125,26 +125,23 @@ def plot_ancestor_boxplot(
     if var == "span":
         vars = [
             f"true_{type}_span",
-            f"inferred_new_{type}_span",
-            f"inferred_old_{type}_span",
+            f"inferred_{type}_span_1.0",
+            f"inferred_{type}_span_0.4",
         ]
         var_labels = ["True", "Inferred (v1.0)", "Inferred (v0.4)"]
         colors = [color_dict["true"], color_dict["new"], color_dict["old"]]
     elif var == "overshoot":
-        vars = [f"new_max_{type}_overshoot", f"old_max_{type}_overshoot"]
+        vars = [f"left_{type}_overshoot_1.0", f"max_{type}_overshoot_0.4"]
         var_labels = ["v1.0", "v0.4"]
         colors = [color_dict["new"], color_dict["old"]]
     else:
-        raise ValueError("var must be 'span' or 'overlap_ratio'")
+        raise ValueError("var must be 'span' or 'overshoot'")
 
     df["frequency_bin"] = pd.cut(df["inferred_time"], bins=cutoffs, include_lowest=True)
     df["frequency_bin"] = df["frequency_bin"].apply(
         lambda x: f"({x.left:.2f}, {x.right:.2f}]"
     )
-    # Create a mapping from variable names to their formatted labels
     var_label_mapping = dict(zip(vars, var_labels))
-
-    # Melt the dataframe and map the 'type' column to the formatted labels
     lengths_df = pd.melt(
         df,
         id_vars=["frequency_bin"],
@@ -158,7 +155,6 @@ def plot_ancestor_boxplot(
         2, 1, figsize=(15, 7), gridspec_kw={"height_ratios": [4, 1]}
     )
 
-    # Use colors from var_dict in the boxplot palette, mapped by formatted labels
     palette = {label: color for label, color in zip(var_labels, colors)}
     sns.boxplot(
         x="frequency_bin",
@@ -170,17 +166,13 @@ def plot_ancestor_boxplot(
         hue_order=var_labels,
         ax=ax1,
     )
-
-    # Adjust legend position to the right of the plot
     ax1.legend(title="Version", loc="upper left", bbox_to_anchor=(1.02, 1))
-
     ax1.set_xlabel("Ancestor age interval (frequency)")
     ax1.set_ylabel(f"Ancestor length overshoot ({y_units})")
     ax1.set_title(title)
     if y_log:
         ax1.set_yscale("log")
 
-    # Plot quantile counts
     quantile_counts = df["frequency_bin"].value_counts(sort=False)
     sns.barplot(
         x=quantile_counts.index,
@@ -193,11 +185,11 @@ def plot_ancestor_boxplot(
     ax2.set_ylabel("Count")
     ax2.tick_params(axis="x", which="both", bottom=False, top=False, labelbottom=False)
     ax2.set_xlabel("")
-    plt.tight_layout(rect=[0, 0, 0.85, 1])  # Add margin for legend on the right
+    plt.tight_layout(rect=[0, 0, 0.85, 1]) 
 
     if save_path is not None:
         plt.savefig(save_path, bbox_inches="tight")
-        plt.close(fig)  # Close the figure to free up memory
+        plt.close(fig)
     else:
         plt.show()
 
