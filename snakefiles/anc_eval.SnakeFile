@@ -55,6 +55,22 @@ def expand_data_frames():
         for model, contig, left, right, n, seed, rep in sim_metadata()
     ]
 
+def map_error_profiles(gerr, ser, mper):
+    output = "unknown"
+    for err_conf in config["error_configs"]:
+        _gerr = err_conf["genotype_errors"]
+        _ser = float(err_conf["switch_error_rate"])
+        _mper = float(err_conf["mispolarisation_error_rate"])
+        _name = err_conf["name"]
+        if (
+            _gerr == gerr
+            and math.isclose(_ser, float(ser), rel_tol=1e-4)
+            and math.isclose(_mper, float(mper), rel_tol=1e-4)
+        ):
+            output = _name
+    return output
+        
+
 rule all:
     input:
         expand_data_frames(),
@@ -63,10 +79,10 @@ rule all:
 rule simulate:
     output:
         data_dir / "simulated" / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.trees",
-    threads: get_resource("intensive", "threads")
+    threads: get_resource("simulate", "threads")
     resources:
-        mem_mb=get_resource("intensive", "mem_mb"),
-        time_min=get_resource("intensive", "time_min"),
+        mem_mb=get_resource("simulate", "mem_mb"),
+        time_min=get_resource("simulate", "time_min"),
     run:
         def match_sim_entry(wildcards):
             for sim in config["sims"]:
@@ -103,10 +119,10 @@ rule prune_simulated_ts:
         data_dir
         / "simulated"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
-    threads: get_resource("intensive", "threads")
+    threads: get_resource("prune_simulated_ts", "threads")
     resources:
-        mem_mb=get_resource("intensive", "mem_mb"),
-        time_min=get_resource("intensive", "time_min"),
+        mem_mb=get_resource("prune_simulated_ts", "mem_mb"),
+        time_min=get_resource("prune_simulated_ts", "time_min"),
     run:
         arg = tskit.load(input[0])
         arg = utils.prune_arg(arg)
@@ -122,10 +138,10 @@ rule bio2zarr_convert:
         / "zarr_vcfs"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.zarr"
         / ".vcf_done",
-    threads: get_resource("intensive", "threads")
+    threads: get_resource("bio2zarr_convert", "threads")
     resources:
-        mem_mb=get_resource("intensive", "mem_mb"),
-        time_min=get_resource("intensive", "time_min"),
+        mem_mb=get_resource("bio2zarr_convert", "mem_mb"),
+        time_min=get_resource("bio2zarr_convert", "time_min"),
     run:
         from bio2zarr import tskit as ts2zarr
         import shutil
@@ -283,10 +299,10 @@ checkpoint build_ancestor_chunks:
         / "chunks"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}"
         / "metadata.json",
-    threads: get_resource("intensive", "threads")
+    threads: get_resource("build_ancestor_chunks", "threads")
     resources:
-        mem_mb=get_resource("intensive", "mem_mb"),
-        time_min=get_resource("intensive", "time_min"),
+        mem_mb=get_resource("build_ancestor_chunks", "mem_mb"),
+        time_min=get_resource("build_ancestor_chunks", "time_min"),
     run:
         anc_data_list = [tsinfer.formats.AncestorData.load(path) for path in input[1:]]
         assert len(anc_data_list) == len(config["versions"])
@@ -320,7 +336,7 @@ def chunk_input(wildcards):
         / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-gerr_{gerr}-ser{ser}-mper{mper}" 
         / f"unprocessed-chunk-{chunk_id}.csv"
     )
-    
+
 
 rule process_ancestor_chunk:
     input:
@@ -329,6 +345,7 @@ rule process_ancestor_chunk:
         / "simulated"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
         anc_data_paths=expand_ancestors_by_version,
+        zarr_path=lambda wildcards: zarr_with_errors(wildcards) / ".mods_done",
     output:
         data_dir 
         / "chunks" 
@@ -360,11 +377,21 @@ rule process_ancestor_chunk:
                     for path, version in zip(input.anc_data_paths, versions)
                 }
                 print(f"[INFO] Starting DF generation", flush=True)
+                ds = sgkit.load_dataset(Path(input.zarr_path).parent, consolidated=False)
+                gerr = wildcards.gerr
+                ser = float(wildcards.ser)
+                mper = float(wildcards.mper)
+                error_profile = map_error_profiles(gerr=gerr, ser=ser, mper=mper)
+                assert error_profile != "unknown", (
+                    f"Error profile not found for gerr={gerr}, ser={ser}, mper={mper}"
+                )
                 utils.process_ancestor_chunk(
                     df=df,
                     ts=ts,
+                    ds=ds,
                     anc_data_map=anc_data_map,
                     rep=wildcards.rep,
+                    error_profile=error_profile,
                     genotype_errors_type=wildcards.gerr,
                     switch_error_rate=wildcards.ser,
                     mispol_error_rate=wildcards.mper,

@@ -116,7 +116,7 @@ def build_shared_site_maps(ts, anc_data_map):
     shared_pos = np.append(shared_pos, last_pos)
     return shared_pos, true_shared_idx, anc_shared_idx_maps
 
-def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, switch_error_rate, mispol_error_rate, output_path):
+def process_ancestor_chunk(df, ts, ds, anc_data_map, rep, error_profile, genotype_errors_type, switch_error_rate, mispol_error_rate, output_path):
 
     if genotype_errors_type == "enabled":
         geno_errors = True
@@ -133,12 +133,14 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
     flags[:] = tskit.NODE_IS_SAMPLE
     tables.nodes.flags = flags
     expanded_ts = tables.tree_sequence()
-
     print(f"[INFO] Generating genotype matrix", flush=True)
     true_genotypes = expanded_ts.genotype_matrix(samples=true_nodes).T
     assert true_genotypes.shape[0] == len(true_nodes)
     true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
-
+    # True if mispolarised:
+    include_mispol = ~ds.variant_mispolarisation_mask.values
+    allele_frequency = ds.variant_allele_frequency.values
+    geno_error_count = ds.variant_genotype_error_count.values
     print(f"[INFO] Building dataframe", flush=True)
 
     with open(output_path, "w", newline="") as f:
@@ -161,27 +163,10 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
             true_full_haplotype = (a_shared > 0).astype("int8")
             true_time = ts.nodes_time[true_node]
             inf_node = row.inf_node
-            true_pos_left = shared_pos[true_left]
-            true_pos_right = shared_pos[true_right]
-
-            record = {
-                "inferred_node": inf_node,
-                "true_node": true_node,
-                "replicate": rep,
-                "genotype_errors_added": geno_errors,
-                "switch_error_rate": switch_error_rate,
-                "mispolarisation_error_rate": mispol_error_rate,
-                "inf_focal_site": row.inf_focal_site,
-                "true_focal_site": row.true_focal_site,
-                "focal_position": row.focal_position,
-                "true_time": true_time,
-                "true_site_left": true_left,
-                "true_site_right": true_right,
-                "true_site_span": true_right - true_left,
-                "true_pos_left": true_pos_left,
-                "true_pos_right": true_pos_right,
-                "true_pos_span": true_pos_right - true_pos_left,
-            }
+            true_boundary = {}
+            true_boundary["left"] = shared_pos[true_left]
+            true_boundary["right"] = shared_pos[true_right]
+            true_span = true_boundary["right"] - true_boundary["left"]
 
             olap_left = true_left
             olap_right = true_right
@@ -198,10 +183,10 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
                 olap_left = max(olap_left, anc_left)
                 olap_right = min(olap_right, anc_right)
             assert olap_left < olap_right
-            olap_site_span = olap_right - olap_left
-            olap_pos_left = shared_pos[olap_left]
-            olap_pos_right = shared_pos[olap_right]
-            olap_pos_span = olap_pos_right - olap_pos_left
+            olap_boundary = {}
+            olap_boundary["left"] = shared_pos[olap_left]
+            olap_boundary["right"] = shared_pos[olap_right]
+            olap_span = olap_boundary["right"] - olap_boundary["right"]
             true_olap = true_full_haplotype[olap_left:olap_right]
 
             for version, anc in anc_dict.items():
@@ -213,45 +198,48 @@ def process_ancestor_chunk(df, ts, anc_data_map, rep, genotype_errors_type, swit
                 errors = inf_olap != true_olap
                 should_be_0 = true_olap & ~inf_olap
                 should_be_1 = ~true_olap & inf_olap
-                inf_pos_left = shared_pos[inf_left]
-                inf_pos_right = shared_pos[inf_right]
-                record.update(
-                    {
-                        f"inferred_site_left_v{version}": inf_left,
-                        f"inferred_site_right_v{version}": inf_right,
-                        f"inferred_site_span_v{version}": inf_right - inf_left,
-                        f"inferred_site_overshoot_left_v{version}": true_left - inf_left,
-                        f"inferred_site_overshoot_right_v{version}": inf_right - true_right,
-                        f"inferred_pos_left_v{version}": inf_pos_left,
-                        f"inferred_pos_right_v{version}": inf_pos_right,
-                        f"inferred_pos_span_v{version}": inf_pos_right - inf_pos_left,
-                        f"inferred_pos_overshoot_left_v{version}": true_pos_left
-                        - inf_pos_left,
-                        f"inferred_pos_overshoot_right_v{version}": inf_pos_right
-                        - true_pos_right,
-                        f"num_errors_v{version}": np.sum(errors),
-                        f"num_should_be_0_v{version}": np.sum(should_be_0),
-                        f"num_should_be_1_v{version}": np.sum(should_be_1),
+                inferred_boundary = {}
+                inferred_boundary["left"] = shared_pos[inf_left]
+                inferred_boundary["right"]  = shared_pos[inf_right]
+                inferred_span = inferred_boundary["right"] - inferred_boundary["left"]
+                for side in ["left", "right"]:
+                    record = {
+                        "inferred_node": inf_node,
+                        "true_node": true_node,
+                        "replicate": rep,
+                        "error_profile": error_profile,
+                        "genotype_errors_added": geno_errors,
+                        "switch_error_rate": switch_error_rate,
+                        "mispolarisation_error_rate": mispol_error_rate,
+                        "version": version,
+                        "side": side,
+                        "inf_focal_site": row.inf_focal_site,
+                        "focal_site_mispolarised": include_mispol[row.inf_focal_site],
+                        "focal_site_geno_error_count": geno_error_count[row.inf_focal_site],
+                        "true_focal_site": row.true_focal_site,
+                        "focal_position": row.focal_position,
+                        "true_time": true_time,
+                        "inferred_time": anc.time,
+                        "allele_frequency": allele_frequency[row.inf_focal_site],
+                        "true_boundary": true_boundary[side],
+                        "true_span": true_span,
+                        "inferred_boundary": inferred_boundary[side],
+                        "inferred_span": inferred_span,
+                        "overlap_boundary": olap_boundary[side],
+                        "overlap_span": olap_span,
+                        "num_errors": np.sum(errors),
+                        "num_should_be_0": np.sum(should_be_0),
+                        "num_should_be_1": np.sum(should_be_1),
                     }
-                )
-
-            record.update(
-                {
-                    "inferred_time": anc.time,
-                    "overlap_site_left": olap_left,
-                    "overlap_site_right": olap_right,
-                    "overlap_site_span": olap_site_span,
-                    "overlap_pos_start": olap_pos_left,
-                    "overlap_pos_end": olap_pos_right,
-                    "overlap_pos_span": olap_pos_span,
-                }
-            )
-
-            if writer is None:
-                writer = csv.DictWriter(f, fieldnames=record.keys())
-                writer.writeheader()
-
-            writer.writerow(record)
+                    if side == "left":
+                        overshoot = true_boundary["left"] - inferred_boundary["left"]
+                    else:
+                        overshoot = inferred_boundary["right"] - true_boundary["right"]
+                    record.update({"overshoot": overshoot})
+                    if writer is None:
+                        writer = csv.DictWriter(f, fieldnames=record.keys())
+                        writer.writeheader()
+                    writer.writerow(record)
 
     print(f"[INFO] Finished writing chunk {output_path}")
 

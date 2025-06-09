@@ -8,25 +8,36 @@ error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
 sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
-    left: 1e7
-    right: 2e7
+    left: 5e7
+    right: 6e7
     samples: {"CEU": 2000, "CHB": 600, "YRI": 600}
     num_reps: 3
-    seed: 1
+    seed: 2
+  # - model: "OutOfAfrica_4J17"
+  #   contig: "chr20"
+  #   left: 1e6
+  #   right: 2e6
+  #   samples: {"CEU": 50, "CHB": 50, "YRI": 50}
+  #   num_reps: 3
+  #   seed: 5
 
 error_configs:
   - genotype_errors: 'disabled'
     switch_error_rate: 0
     mispolarisation_error_rate: 0
+    name: "none"
   - genotype_errors: 'enabled'
     switch_error_rate: 0
     mispolarisation_error_rate: 0
+    name: "genotype"
   - genotype_errors: 'disabled'
     switch_error_rate: 5e-3
     mispolarisation_error_rate: 0
+    name: "phasing"
   - genotype_errors: 'disabled'
     switch_error_rate: 0
-    mispolarisation_error_rate: 4e-2
+    mispolarisation_error_rate: 1e-2
+    name: "mispolarisation"
 
 versions:
   - 0.4
@@ -40,14 +51,19 @@ resources:
     mem_mb: 16000
     time_min: 500
 
-  intensive:
-    threads: 124
-    mem_mb: 512000
+  simulate:
+    threads: 62
+    mem_mb: 256000
+    time_min: 500
+
+  bio2zarr_convert:
+    threads: 62
+    mem_mb: 256000
     time_min: 500
 
   generate_ancestors:
-    threads: 124
-    mem_mb: 512000
+    threads: 62
+    mem_mb: 256000
     time_min: 500
 
   process_ancestor_chunk:
