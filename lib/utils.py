@@ -5,6 +5,7 @@ import pandas as pd
 import json
 import tskit
 import csv
+import math
 from tqdm import tqdm
 
 def prune_arg(arg):
@@ -137,7 +138,8 @@ def process_ancestor_chunk(df, ts, ds, anc_data_map, rep, error_profile, genotyp
     true_genotypes = expanded_ts.genotype_matrix(samples=true_nodes).T
     assert true_genotypes.shape[0] == len(true_nodes)
     true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
-    # True if mispolarised:
+    
+    ds_variant_pos = ds.variant_position.values
     include_mispol = ~ds.variant_mispolarisation_mask.values
     allele_frequency = ds.variant_allele_frequency.values
     geno_error_count = ds.variant_genotype_error_count.values
@@ -186,9 +188,8 @@ def process_ancestor_chunk(df, ts, ds, anc_data_map, rep, error_profile, genotyp
             olap_boundary = {}
             olap_boundary["left"] = shared_pos[olap_left]
             olap_boundary["right"] = shared_pos[olap_right]
-            olap_span = olap_boundary["right"] - olap_boundary["right"]
+            olap_span = olap_boundary["right"] - olap_boundary["left"]
             true_olap = true_full_haplotype[olap_left:olap_right]
-
             for version, anc in anc_dict.items():
                 anc_shared_idx = anc_shared_idx_map[version]
                 inf_left, inf_right = anc_interval_dict[version]
@@ -202,6 +203,9 @@ def process_ancestor_chunk(df, ts, ds, anc_data_map, rep, error_profile, genotyp
                 inferred_boundary["left"] = shared_pos[inf_left]
                 inferred_boundary["right"]  = shared_pos[inf_right]
                 inferred_span = inferred_boundary["right"] - inferred_boundary["left"]
+                ds_focal_site = np.searchsorted(ds_variant_pos, row.focal_position)
+                af = allele_frequency[ds_focal_site]
+                #assert math.isclose(af, anc.time, rel_tol=1e-4)
                 for side in ["left", "right"]:
                     record = {
                         "inferred_node": inf_node,
@@ -214,13 +218,13 @@ def process_ancestor_chunk(df, ts, ds, anc_data_map, rep, error_profile, genotyp
                         "version": version,
                         "side": side,
                         "inf_focal_site": row.inf_focal_site,
-                        "focal_site_mispolarised": include_mispol[row.inf_focal_site],
-                        "focal_site_geno_error_count": geno_error_count[row.inf_focal_site],
                         "true_focal_site": row.true_focal_site,
                         "focal_position": row.focal_position,
+                        "focal_site_mispolarised": include_mispol[ds_focal_site],
+                        "focal_site_geno_error_count": geno_error_count[ds_focal_site],
+                        "allele_frequency": af,
                         "true_time": true_time,
                         "inferred_time": anc.time,
-                        "allele_frequency": allele_frequency[row.inf_focal_site],
                         "true_boundary": true_boundary[side],
                         "true_span": true_span,
                         "inferred_boundary": inferred_boundary[side],

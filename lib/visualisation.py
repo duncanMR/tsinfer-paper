@@ -125,13 +125,13 @@ def plot_ancestor_boxplot(
     if var == "span":
         vars = [
             f"true_{type}_span",
-            f"inferred_{type}_span_1.0",
-            f"inferred_{type}_span_0.4",
+            f"inferred_{type}_span_v1.0",
+            f"inferred_{type}_span_v0.4",
         ]
         var_labels = ["True", "Inferred (v1.0)", "Inferred (v0.4)"]
         colors = [color_dict["true"], color_dict["new"], color_dict["old"]]
     elif var == "overshoot":
-        vars = [f"left_{type}_overshoot_1.0", f"max_{type}_overshoot_0.4"]
+        vars = [f"inferred_{type}_overshoot_left_v1.0", f"inferred_{type}_overshoot_left_v0.4"]
         var_labels = ["v1.0", "v0.4"]
         colors = [color_dict["new"], color_dict["old"]]
     else:
