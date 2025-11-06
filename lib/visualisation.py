@@ -104,91 +104,59 @@ def plot_ancestor_boxplot(
     type="site",
     title="Ancestor lengths",
     y_log=False,
-    save_path=None,
-    color_dict={
-        "new": "#d62728",  
-        "old": "#ff7f0e", 
-        "true": "#1f77b4",
-    },
+    plot_path=None,
+    color_dict={"new": "#ea801c","old": "#1a80bb","true": "#b8b8b8"},
 ):
-    df = df.copy()  # To avoid SettingWithCopyWarning
-    df = df.drop_duplicates(subset="inferred_node", keep="first")
+    #df = df.copy()
+    #df = df.drop_duplicates(subset=["inferred_node", "version"], keep="first")
     if cutoffs is None:
         cutoffs = np.unique(np.percentile(df["inferred_time"], np.linspace(0, 100, 9)))
 
-    if type == "site":
-        y_units = "sites"
-    elif type == "pos":
-        y_units = "bp"
-    else:
-        raise ValueError("type must be 'site' or 'pos'")
+    y_units = "sites" if type == "site" else "bp"
     if var == "span":
-        vars = [
-            f"true_{type}_span",
-            f"inferred_{type}_span_v1.0",
-            f"inferred_{type}_span_v0.4",
-        ]
-        var_labels = ["True", "Inferred (v1.0)", "Inferred (v0.4)"]
+        var_col = "inferred_span"
+        true_col = "true_span"
+        var_labels = ["True", "Inferred (0.5.0)", "Inferred (0.4.1)"]
         colors = [color_dict["true"], color_dict["new"], color_dict["old"]]
     elif var == "overshoot":
-        vars = [f"inferred_{type}_overshoot_left_v1.0", f"inferred_{type}_overshoot_left_v0.4"]
-        var_labels = ["v1.0", "v0.4"]
+        var_col = "overshoot"
+        true_col = None
+        var_labels = ["0.5.0", "0.4.1"]
         colors = [color_dict["new"], color_dict["old"]]
     else:
         raise ValueError("var must be 'span' or 'overshoot'")
 
     df["frequency_bin"] = pd.cut(df["inferred_time"], bins=cutoffs, include_lowest=True)
-    df["frequency_bin"] = df["frequency_bin"].apply(
-        lambda x: f"({x.left:.2f}, {x.right:.2f}]"
-    )
-    var_label_mapping = dict(zip(vars, var_labels))
-    lengths_df = pd.melt(
-        df,
-        id_vars=["frequency_bin"],
-        value_vars=vars,
-        var_name="type",
-        value_name="value",
-    )
-    lengths_df["type"] = lengths_df["type"].map(var_label_mapping)
+    df["frequency_bin"] = df["frequency_bin"].apply(lambda x: f"({x.left:.2f}, {x.right:.2f}]")
+    #return df
+    parts = []
+    if true_col is not None:
+        parts.append(df[["frequency_bin", true_col]].rename(columns={true_col: "value"}).assign(type="True"))
+    for version in ["0.4.1", "0.5.0"]:
+        part = df.loc[df["version"]==version, ["frequency_bin", var_col]].rename(columns={var_col: "value"}).assign(type=f"Inferred ({version})")
+        assert len(part) > 0
+        parts.append(part)
+    lengths_df = pd.concat(parts, ignore_index=True)
 
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(15, 7), gridspec_kw={"height_ratios": [4, 1]}
-    )
-
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 5), gridspec_kw={"height_ratios": [4, 1]})
     palette = {label: color for label, color in zip(var_labels, colors)}
-    sns.boxplot(
-        x="frequency_bin",
-        y="value",
-        hue="type",
-        data=lengths_df,
-        palette=palette,
-        saturation=1,
-        hue_order=var_labels,
-        ax=ax1,
-    )
+    sns.boxplot(x="frequency_bin", y="value", hue="type", data=lengths_df, palette=palette, saturation=1, hue_order=var_labels, ax=ax1)
     ax1.legend(title="Version", loc="upper left", bbox_to_anchor=(1.02, 1))
-    ax1.set_xlabel("Ancestor age interval (frequency)")
-    ax1.set_ylabel(f"Ancestor length overshoot ({y_units})")
+    ax1.set_xlabel("Frequency range of focal site")
+    ax1.set_ylabel(("Ancestor length" if var=="span" else "Ancestor length overshoot")+f" ({y_units})")
     ax1.set_title(title)
     if y_log:
         ax1.set_yscale("log")
 
     quantile_counts = df["frequency_bin"].value_counts(sort=False)
-    sns.barplot(
-        x=quantile_counts.index,
-        y=quantile_counts.values,
-        ax=ax2,
-        color="#ced4da",
-        linewidth=1,
-        edgecolor="black",
-    )
+    sns.barplot(x=quantile_counts.index, y=quantile_counts.values, ax=ax2, color="#ced4da", linewidth=1, edgecolor="black")
     ax2.set_ylabel("Count")
     ax2.tick_params(axis="x", which="both", bottom=False, top=False, labelbottom=False)
     ax2.set_xlabel("")
-    plt.tight_layout(rect=[0, 0, 0.85, 1]) 
-
-    if save_path is not None:
-        plt.savefig(save_path, bbox_inches="tight")
+    ax2.set_yscale("log")
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
+    if plot_path is not None:
+        plt.savefig(plot_path, bbox_inches="tight", dpi=300)
         plt.close(fig)
     else:
         plt.show()
