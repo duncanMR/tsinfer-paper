@@ -1,0 +1,7 @@
+data/anc_eval/
+__pycache__/
+env/
+notebooks/
+.snakemake/
+.ipynb_checkpoints/
+*.pdf

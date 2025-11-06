@@ -1,0 +1,67 @@
+prefix: "set -euo pipefail; "
+data_dir: "data/anc_eval"
+progress_dir: "data/anc_eval/progress"
+env_dir: "/well/kelleher/users/uuc395/tsinfer-paper/env"
+tsinfer_dir: "/well/kelleher/users/uuc395/tsinfer"
+error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
+
+sims:
+  - model: "OutOfAfrica_4J17"
+    contig: "chr20"
+    left: 2e7
+    right: 4e7
+    samples: {"CEU": 5000, "CHB": 1000, "YRI": 1000}
+    num_reps: 3
+    seed: 3
+  # - model: "OutOfAfrica_4J17"
+  #   contig: "chr20"
+  #   left: 1e5
+  #   right: 2e5
+  #   samples: {"CEU": 10, "CHB": 10, "YRI": 10}
+  #   num_reps: 1
+  #   seed: 2
+
+error_configs:
+  - genotype_errors: 'disabled'
+    switch_error_rate: 0
+    mispolarisation_error_rate: 0
+    name: "none"
+  - genotype_errors: 'enabled'
+    switch_error_rate: 0
+    mispolarisation_error_rate: 0
+    name: "genotype"
+  - genotype_errors: 'disabled'
+    switch_error_rate: 5e-3
+    mispolarisation_error_rate: 0
+    name: "phasing"
+  - genotype_errors: 'disabled'
+    switch_error_rate: 0
+    mispolarisation_error_rate: 1e-2
+    name: "mispolarisation"
+
+versions:
+  - 0.4
+  - 1.0
+
+ancestor_chunk_size: 5000
+
+resources:
+  default:
+    threads: 32 
+    mem_mb: 64000
+    time_min: 500
+
+  simulate:
+    threads: 192 
+    mem_mb: 1000000
+    time_min: 500
+
+  bio2zarr_convert:
+    threads: 192 
+    mem_mb: 1000000
+    time_min: 500
+
+  process_ancestor_chunk:
+    threads: 1
+    mem_mb: 96000
+    time_min: 500
